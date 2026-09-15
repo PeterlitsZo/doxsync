@@ -36,13 +36,48 @@ impl Message {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use crate::Value;
 
     use super::*;
 
     fn hex_to_bytes(hex: &str) -> Vec<u8> {
-        let hex = hex.replace(" ", "");
-        hex::decode(hex).unwrap()
+        let mut hex_post = String::new();
+        let hex_chars: Vec<_> = hex.chars().collect();
+        let mut i = 0;
+        loop {
+            let byte = hex_chars[i];
+            match byte {
+                ' ' | '\n' => {}
+                '/' => {
+                    // Comment begin with '//'...
+                    i += 1;
+                    if i >= hex_chars.len() {
+                        break;
+                    }
+                    let next = hex_chars[i];
+                    if next != '/' {
+                        panic!("expected '//' comment to end at index {}", i);
+                    }
+                    i += 1;
+                    while i < hex_chars.len() {
+                        let byte = hex_chars[i];
+                        if byte == '\n' {
+                            break;
+                        }
+                        i += 1;
+                    }
+                    continue;
+                }
+                _ => hex_post.push(byte),
+            }
+            i += 1;
+            if i >= hex_chars.len() {
+                break;
+            }
+        }
+        hex::decode(hex_post).unwrap()
     }
 
     #[test]
@@ -157,5 +192,34 @@ mod tests {
                 value: Value::float(3.1415926).unwrap()
             },]
         );
+
+        // Case 7:
+        // =====================================================================
+
+        let mut map = BTreeMap::new();
+        map.insert("answer".to_owned(), Value::int(42).unwrap());
+        map.insert("pi".to_owned(), Value::float(3.1415926).unwrap());
+        let value = Value::map(map).unwrap();
+        let message = Message::new(vec![Action::Snapshot {
+            value: value.clone(),
+        }]);
+
+        let packed = message.packed();
+        assert_eq!(
+            packed.bytes(),
+            hex_to_bytes(indoc::indoc! { r#"
+                00
+                01
+                  00
+                    52
+                      06 61 6e 73 77 65 72       // key "answer"
+                      0c 2a                      // value int(42)
+                      02 70 69                   // key "pi"
+                      7b 4a d8 12 4d fb 21 09 40 // value float(3.1415926)
+            "# })
+        );
+
+        let unpacked = Message::from_packed(packed).unwrap();
+        assert_eq!(unpacked.actions, &[Action::Snapshot { value },]);
     }
 }

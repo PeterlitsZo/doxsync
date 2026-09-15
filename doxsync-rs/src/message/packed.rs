@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::{
     Error, ErrorKind, Result, Value,
     message::{Action, Message},
@@ -5,6 +7,7 @@ use crate::{
 
 const TAG_POSINT: u8 = 0b0000;
 const TAG_NEGINT: u8 = 0b0001;
+const TAG_MAP: u8 = 0b0101;
 const TAG_FLOAT: u8 = 0b0111;
 
 const TAG_WIDTH: usize = 4;
@@ -28,6 +31,14 @@ mod negint {
 
 mod float {
     pub(crate) const BITS_64: u8 = 11;
+}
+
+mod map {
+    pub(crate) const INLINE: u8 = 11;
+    pub(crate) const BITS_8: u8 = 12;
+    pub(crate) const BITS_16: u8 = 13;
+    pub(crate) const BITS_32: u8 = 14;
+    pub(crate) const BITS_64: u8 = 15;
 }
 
 /// A packed doxsync message.
@@ -168,6 +179,10 @@ impl PackedMessageDecoder {
                     Self::unpack_float(bytes).map_err(|e| e.with_context("unpack float"))?;
                 Ok(Value::inner_float(value))
             }
+            TAG_MAP => {
+                let value = Self::unpack_map(bytes).map_err(|e| e.with_context("unpack map"))?;
+                Ok(Value::inner_map(value))
+            }
             _ => Err(Error::new(ErrorKind::InvalidData, "invalid value type")),
         }
     }
@@ -295,6 +310,87 @@ impl PackedMessageDecoder {
 
         Ok(value)
     }
+
+    fn unpack_map(bytes: &mut &[u8]) -> Result<BTreeMap<String, Value>> {
+        fn unexpected_end_of_value() -> Error {
+            Error::new(ErrorKind::InvalidData, "unexpected end of value")
+        }
+
+        let first_byte = bytes.get(0).ok_or_else(|| {
+            unexpected_end_of_value().with_metadata("cause", "first byte not found")
+        })?;
+        let first_byte_payload = *first_byte & PAYLOAD_MASK;
+
+        let value_len = if first_byte_payload <= map::INLINE {
+            *bytes = bytes
+                .get(1..)
+                .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
+            first_byte_payload as u64
+        } else if first_byte_payload == map::BITS_8 {
+            let bytes_to_parse = bytes
+                .get(1..2)
+                .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
+            let bytes_ptr = bytes_to_parse as *const [u8] as *const u8;
+            let value = u8::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 1]) });
+            *bytes = bytes.get(2..).ok_or_else(unexpected_end_of_value)?;
+            value as u64
+        } else if first_byte_payload == map::BITS_16 {
+            let bytes_to_parse = bytes
+                .get(1..3)
+                .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
+            let bytes_ptr = bytes_to_parse as *const [u8] as *const u8;
+            let value = u16::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 2]) });
+            *bytes = bytes.get(3..).ok_or_else(unexpected_end_of_value)?;
+            value as u64
+        } else if first_byte_payload == map::BITS_32 {
+            let bytes_to_parse = bytes
+                .get(1..5)
+                .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
+            let bytes_ptr = bytes_to_parse as *const [u8] as *const u8;
+            let value = u32::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 4]) });
+            *bytes = bytes.get(5..).ok_or_else(unexpected_end_of_value)?;
+            value as u64
+        } else {
+            let bytes_to_parse = bytes
+                .get(1..9)
+                .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
+            let bytes_ptr = bytes_to_parse as *const [u8] as *const u8;
+            let value = u64::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 8]) });
+            *bytes = bytes.get(9..).ok_or_else(unexpected_end_of_value)?;
+            value
+        };
+
+        let mut value = BTreeMap::new();
+        for index in 0..value_len {
+            let key_len =
+                Self::unpack_varuint(bytes).map_err(|e| e.with_context("unpack map key length"))?;
+            let key_len = usize::try_from(key_len).map_err(|_| {
+                Error::new(ErrorKind::InvalidData, "map key too large")
+                    .with_metadata("index", index)
+            })?;
+            let key_bytes = bytes.get(..key_len).ok_or_else(|| {
+                unexpected_end_of_value()
+                    .with_metadata("index", index)
+                    .with_metadata("key_len", key_len)
+            })?;
+            let key = std::str::from_utf8(key_bytes)
+                .map_err(|_| {
+                    Error::new(ErrorKind::InvalidData, "invalid UTF-8 map key")
+                        .with_metadata("index", index)
+                })?
+                .to_owned();
+            *bytes = bytes.get(key_len..).ok_or_else(unexpected_end_of_value)?;
+
+            let item_value =
+                Self::unpack_value(bytes).map_err(|e| e.with_context("unpack map value"))?;
+            if value.insert(key, item_value).is_some() {
+                return Err(Error::new(ErrorKind::InvalidData, "duplicate map key")
+                    .with_metadata("index", index));
+            }
+        }
+
+        Ok(value)
+    }
 }
 
 /// A builder to build packed doxsync messages.
@@ -374,6 +470,7 @@ impl<'a> PackedMessageBuilder<'a> {
             ValueInner::PosInt { inner } => Self::pack_posint(bytes, *inner),
             ValueInner::NegInt { inner } => Self::pack_negint(bytes, *inner),
             ValueInner::Float { inner } => Self::pack_float(bytes, *inner),
+            ValueInner::Map { inner } => Self::pack_map(bytes, inner),
         }
     }
 
@@ -382,7 +479,7 @@ impl<'a> PackedMessageBuilder<'a> {
             // Pack small values directly as bytes.
             bytes.push((TAG_POSINT << TAG_WIDTH) | (value as u8));
             return;
-        } else if value <= 255 {
+        } else if value < (1 << 8) {
             // Pack 1-byte values with type indicator.
             bytes.push((TAG_POSINT << TAG_WIDTH) | posint::BITS_8);
             bytes.push(value as u8);
@@ -406,11 +503,11 @@ impl<'a> PackedMessageBuilder<'a> {
     }
 
     fn pack_negint(bytes: &mut Vec<u8>, value: u64) {
-        if value <= 11 {
+        if value <= negint::INLINE as u64 {
             // Pack small values directly as bytes.
             bytes.push((TAG_NEGINT << TAG_WIDTH) | (value as u8));
             return;
-        } else if value <= 255 {
+        } else if value < (1 << 8) {
             // Pack 1-byte values with type indicator.
             bytes.push((TAG_NEGINT << TAG_WIDTH) | negint::BITS_8);
             bytes.push(value as u8);
@@ -436,5 +533,31 @@ impl<'a> PackedMessageBuilder<'a> {
     fn pack_float(bytes: &mut Vec<u8>, value: f64) {
         bytes.push((TAG_FLOAT << TAG_WIDTH) | float::BITS_64);
         bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn pack_map(bytes: &mut Vec<u8>, value: &BTreeMap<String, Value>) {
+        let value_len = value.len();
+
+        if value_len <= map::INLINE as usize {
+            bytes.push((TAG_MAP << TAG_WIDTH) | (value_len as u8));
+        } else if value_len < (1 << 8) {
+            bytes.push((TAG_MAP << TAG_WIDTH) | map::BITS_8);
+            bytes.extend_from_slice(&(value_len as u8).to_le_bytes());
+        } else if value_len < (1 << 16) {
+            bytes.push((TAG_MAP << TAG_WIDTH) | map::BITS_16);
+            bytes.extend_from_slice(&(value_len as u16).to_le_bytes());
+        } else if value_len < (1 << 32) {
+            bytes.push((TAG_MAP << TAG_WIDTH) | map::BITS_32);
+            bytes.extend_from_slice(&(value_len as u32).to_le_bytes());
+        } else {
+            bytes.push((TAG_MAP << TAG_WIDTH) | map::BITS_64);
+            bytes.extend_from_slice(&(value_len as u64).to_le_bytes());
+        }
+
+        for (key, value) in value.iter() {
+            Self::pack_varuint(bytes, key.len() as u64);
+            bytes.extend_from_slice(key.as_bytes());
+            Self::pack_value(bytes, value);
+        }
     }
 }

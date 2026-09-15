@@ -1,12 +1,13 @@
-use std::{fmt::Debug, sync::Arc};
+use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 
 use blake3::Hash;
 
 use crate::{Error, ErrorKind, Result};
 
-const TAG_POSINT: u8 = 0;
-const TAG_NEGINT: u8 = 1;
-const TAG_FLOAT: u8 = 2;
+const TAG_POSINT: u8 = 0x00;
+const TAG_NEGINT: u8 = 0x01;
+const TAG_MAP: u8 = 0x05;
+const TAG_FLOAT: u8 = 0x07;
 
 /// The doxsync value type.
 ///
@@ -31,6 +32,8 @@ pub(crate) enum ValueInner {
     NegInt{ inner: u64 },
     /// A floating-point value.
     Float{ inner: f64 },
+    /// A map value.
+    Map{ inner: BTreeMap<String, Value> },
 }
 
 impl Value {
@@ -50,6 +53,10 @@ impl Value {
 
     pub fn float(value: f64) -> Result<Self> {
         Ok(Value::inner_float(value))
+    }
+
+    pub fn map(value: BTreeMap<String, Value>) -> Result<Self> {
+        Ok(Value::inner_map(value))
     }
 }
 
@@ -90,6 +97,20 @@ impl Value {
             inner: Arc::new(ValueInner::Float { inner }),
         }
     }
+
+    pub(crate) fn inner_map(inner: BTreeMap<String, Value>) -> Self {
+        let mut hash = blake3::Hasher::new();
+        hash.update(&[TAG_MAP]);
+        for (key, value) in &inner {
+            hash.update(key.as_bytes());
+            hash.update(value.hash.as_bytes());
+        }
+        let hash = hash.finalize();
+        Value {
+            hash,
+            inner: Arc::new(ValueInner::Map { inner }),
+        }
+    }
 }
 
 impl Debug for Value {
@@ -98,6 +119,7 @@ impl Debug for Value {
             ValueInner::PosInt { inner } => write!(f, "PosInt({})", inner),
             ValueInner::NegInt { inner } => write!(f, "NegInt({})", -(*inner as i128) - 1),
             ValueInner::Float { inner } => write!(f, "Float({})", inner),
+            ValueInner::Map { inner } => write!(f, "Map({:?})", inner),
         }
     }
 }
