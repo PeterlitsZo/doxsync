@@ -3,6 +3,33 @@ use crate::{
     message::{Action, Message},
 };
 
+const TAG_POSINT: u8 = 0b0000;
+const TAG_NEGINT: u8 = 0b0001;
+const TAG_FLOAT: u8 = 0b0111;
+
+const TAG_WIDTH: usize = 4;
+const PAYLOAD_MASK: u8 = 0x0F;
+
+mod posint {
+    pub(crate) const INLINE: u8 = 11;
+    pub(crate) const BITS_8: u8 = 12;
+    pub(crate) const BITS_16: u8 = 13;
+    pub(crate) const BITS_32: u8 = 14;
+    pub(crate) const BITS_64: u8 = 15;
+}
+
+mod negint {
+    pub(crate) const INLINE: u8 = 11;
+    pub(crate) const BITS_8: u8 = 12;
+    pub(crate) const BITS_16: u8 = 13;
+    pub(crate) const BITS_32: u8 = 14;
+    pub(crate) const BITS_64: u8 = 15;
+}
+
+mod float {
+    pub(crate) const BITS_64: u8 = 11;
+}
+
 /// A packed doxsync message.
 pub struct PackedMessage {
     /// The packed message bytes.
@@ -125,16 +152,21 @@ impl PackedMessageDecoder {
             ErrorKind::InvalidData,
             "unexpected end of value",
         ))?;
-        match value_type >> 4 {
-            0 => {
+        match value_type >> TAG_WIDTH {
+            TAG_POSINT => {
                 let value =
                     Self::unpack_posint(bytes).map_err(|e| e.with_context("unpack posint"))?;
                 Ok(Value::inner_posint(value))
             }
-            1 => {
+            TAG_NEGINT => {
                 let value =
                     Self::unpack_negint(bytes).map_err(|e| e.with_context("unpack negint"))?;
                 Ok(Value::inner_negint(value))
+            }
+            TAG_FLOAT => {
+                let value =
+                    Self::unpack_float(bytes).map_err(|e| e.with_context("unpack float"))?;
+                Ok(Value::inner_float(value))
             }
             _ => Err(Error::new(ErrorKind::InvalidData, "invalid value type")),
         }
@@ -148,14 +180,14 @@ impl PackedMessageDecoder {
         let first_byte = bytes.get(0).ok_or_else(|| {
             unexpected_end_of_value().with_metadata("cause", "unexpected end of value")
         })?;
-        let first_byte = *first_byte & 0x0F;
+        let first_byte = *first_byte & PAYLOAD_MASK;
 
-        if first_byte <= 11 {
+        if first_byte <= posint::INLINE {
             *bytes = bytes
                 .get(1..)
                 .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
             return Ok(first_byte as u64);
-        } else if first_byte == 12 {
+        } else if first_byte == posint::BITS_8 {
             let bytes_to_parse = bytes
                 .get(1..2)
                 .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
@@ -163,7 +195,7 @@ impl PackedMessageDecoder {
             let value = u8::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 1]) });
             *bytes = bytes.get(2..).ok_or_else(unexpected_end_of_value)?;
             Ok(value as u64)
-        } else if first_byte == 13 {
+        } else if first_byte == posint::BITS_16 {
             let bytes_to_parse = bytes
                 .get(1..3)
                 .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
@@ -171,7 +203,7 @@ impl PackedMessageDecoder {
             let value = u16::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 2]) });
             *bytes = bytes.get(3..).ok_or_else(unexpected_end_of_value)?;
             Ok(value as u64)
-        } else if first_byte == 14 {
+        } else if first_byte == posint::BITS_32 {
             let bytes_to_parse = bytes
                 .get(1..5)
                 .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
@@ -198,14 +230,14 @@ impl PackedMessageDecoder {
         let first_byte = bytes.get(0).ok_or_else(|| {
             unexpected_end_of_value().with_metadata("cause", "first byte not found")
         })?;
-        let first_byte = *first_byte & 0x0F;
+        let first_byte = *first_byte & PAYLOAD_MASK;
 
-        if first_byte <= 11 {
+        if first_byte <= negint::INLINE {
             *bytes = bytes
                 .get(1..)
                 .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
             return Ok(first_byte as u64);
-        } else if first_byte == 12 {
+        } else if first_byte == negint::BITS_8 {
             let bytes_to_parse = bytes
                 .get(1..2)
                 .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
@@ -213,7 +245,7 @@ impl PackedMessageDecoder {
             let value = u8::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 1]) });
             *bytes = bytes.get(2..).ok_or_else(unexpected_end_of_value)?;
             Ok(value as u64)
-        } else if first_byte == 13 {
+        } else if first_byte == negint::BITS_16 {
             let bytes_to_parse = bytes
                 .get(1..3)
                 .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
@@ -221,7 +253,7 @@ impl PackedMessageDecoder {
             let value = u16::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 2]) });
             *bytes = bytes.get(3..).ok_or_else(unexpected_end_of_value)?;
             Ok(value as u64)
-        } else if first_byte == 14 {
+        } else if first_byte == negint::BITS_32 {
             let bytes_to_parse = bytes
                 .get(1..5)
                 .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
@@ -238,6 +270,30 @@ impl PackedMessageDecoder {
             *bytes = bytes.get(9..).ok_or_else(unexpected_end_of_value)?;
             Ok(value as u64)
         }
+    }
+
+    fn unpack_float(bytes: &mut &[u8]) -> Result<f64> {
+        fn unexpected_end_of_value() -> Error {
+            Error::new(ErrorKind::InvalidData, "unexpected end of value")
+        }
+
+        let first_byte = bytes.get(0).ok_or_else(|| {
+            unexpected_end_of_value().with_metadata("cause", "first byte not found")
+        })?;
+        let first_byte_payload = *first_byte & PAYLOAD_MASK;
+
+        if first_byte_payload != float::BITS_64 {
+            return Err(unexpected_end_of_value().with_metadata("first_byte_payload", first_byte));
+        }
+
+        let bytes_to_parse = bytes
+            .get(1..9)
+            .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
+        let bytes_ptr = bytes_to_parse as *const [u8] as *const u8;
+        let value = f64::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 8]) });
+        *bytes = bytes.get(9..).ok_or_else(unexpected_end_of_value)?;
+
+        Ok(value)
     }
 }
 
@@ -317,32 +373,33 @@ impl<'a> PackedMessageBuilder<'a> {
         match value.inner() {
             ValueInner::PosInt { inner } => Self::pack_posint(bytes, *inner),
             ValueInner::NegInt { inner } => Self::pack_negint(bytes, *inner),
+            ValueInner::Float { inner } => Self::pack_float(bytes, *inner),
         }
     }
 
     fn pack_posint(bytes: &mut Vec<u8>, value: u64) {
-        if value <= 11 {
+        if value <= posint::INLINE as u64 {
             // Pack small values directly as bytes.
-            bytes.push((0u8 << 4) | (value as u8));
+            bytes.push((TAG_POSINT << TAG_WIDTH) | (value as u8));
             return;
         } else if value <= 255 {
             // Pack 1-byte values with type indicator.
-            bytes.push((0u8 << 4) | 12);
+            bytes.push((TAG_POSINT << TAG_WIDTH) | posint::BITS_8);
             bytes.push(value as u8);
             return;
         } else if value < (1 << 16) {
             // Pack 2-byte values with type indicator.
-            bytes.push((0u8 << 4) | 13);
+            bytes.push((TAG_POSINT << TAG_WIDTH) | posint::BITS_16);
             bytes.extend_from_slice(&(value as u16).to_le_bytes());
             return;
         } else if value < (1 << 32) {
             // Pack 4-byte values with type indicator.
-            bytes.push((0u8 << 4) | 14);
+            bytes.push((TAG_POSINT << TAG_WIDTH) | posint::BITS_32);
             bytes.extend_from_slice(&(value as u32).to_le_bytes());
             return;
         } else {
             // Pack 8-byte values with type indicator.
-            bytes.push((0u8 << 4) | 15);
+            bytes.push((TAG_POSINT << TAG_WIDTH) | posint::BITS_64);
             bytes.extend_from_slice(&value.to_le_bytes());
             return;
         }
@@ -351,28 +408,33 @@ impl<'a> PackedMessageBuilder<'a> {
     fn pack_negint(bytes: &mut Vec<u8>, value: u64) {
         if value <= 11 {
             // Pack small values directly as bytes.
-            bytes.push((1u8 << 4) | (value as u8));
+            bytes.push((TAG_NEGINT << TAG_WIDTH) | (value as u8));
             return;
         } else if value <= 255 {
             // Pack 1-byte values with type indicator.
-            bytes.push((1u8 << 4) | 12);
+            bytes.push((TAG_NEGINT << TAG_WIDTH) | negint::BITS_8);
             bytes.push(value as u8);
             return;
         } else if value < (1 << 16) {
             // Pack 2-byte values with type indicator.
-            bytes.push((1u8 << 4) | 13);
+            bytes.push((TAG_NEGINT << TAG_WIDTH) | negint::BITS_16);
             bytes.extend_from_slice(&(value as u16).to_le_bytes());
             return;
         } else if value < (1 << 32) {
             // Pack 4-byte values with type indicator.
-            bytes.push((1u8 << 4) | 14);
+            bytes.push((TAG_NEGINT << TAG_WIDTH) | negint::BITS_32);
             bytes.extend_from_slice(&(value as u32).to_le_bytes());
             return;
         } else {
             // Pack 8-byte values with type indicator.
-            bytes.push((1u8 << 4) | 15);
+            bytes.push((TAG_NEGINT << TAG_WIDTH) | negint::BITS_64);
             bytes.extend_from_slice(&value.to_le_bytes());
             return;
         }
+    }
+
+    fn pack_float(bytes: &mut Vec<u8>, value: f64) {
+        bytes.push((TAG_FLOAT << TAG_WIDTH) | float::BITS_64);
+        bytes.extend_from_slice(&value.to_le_bytes());
     }
 }

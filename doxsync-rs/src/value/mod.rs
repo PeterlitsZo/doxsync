@@ -6,6 +6,7 @@ use crate::{Error, ErrorKind, Result};
 
 const TAG_POSINT: u8 = 0;
 const TAG_NEGINT: u8 = 1;
+const TAG_FLOAT: u8 = 2;
 
 /// The doxsync value type.
 ///
@@ -28,6 +29,8 @@ pub(crate) enum ValueInner {
     PosInt{ inner: u64 },
     /// A negative integer value.
     NegInt{ inner: u64 },
+    /// A floating-point value.
+    Float{ inner: f64 },
 }
 
 impl Value {
@@ -43,6 +46,10 @@ impl Value {
             }
             Ok(Value::inner_negint((-value - 1) as u64))
         }
+    }
+
+    pub fn float(value: f64) -> Result<Self> {
+        Ok(Value::inner_float(value))
     }
 }
 
@@ -72,6 +79,17 @@ impl Value {
             inner: Arc::new(ValueInner::NegInt { inner }),
         }
     }
+
+    pub(crate) fn inner_float(inner: f64) -> Self {
+        let mut hash = blake3::Hasher::new();
+        hash.update(&[TAG_FLOAT]);
+        hash.update(&inner.to_le_bytes());
+        let hash = hash.finalize();
+        Value {
+            hash,
+            inner: Arc::new(ValueInner::Float { inner }),
+        }
+    }
 }
 
 impl Debug for Value {
@@ -79,6 +97,7 @@ impl Debug for Value {
         match &*self.inner {
             ValueInner::PosInt { inner } => write!(f, "PosInt({})", inner),
             ValueInner::NegInt { inner } => write!(f, "NegInt({})", -(*inner as i128) - 1),
+            ValueInner::Float { inner } => write!(f, "Float({})", inner),
         }
     }
 }
