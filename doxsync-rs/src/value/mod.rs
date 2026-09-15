@@ -1,14 +1,28 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::Arc};
+
+use blake3::Hash;
 
 use crate::{Error, ErrorKind, Result};
 
+const TAG_POSINT: u8 = 0;
+const TAG_NEGINT: u8 = 1;
+
 /// The doxsync value type.
-#[derive(Clone, PartialEq)]
+///
+/// Fast to compare, and cheap to clone.
+#[derive(Clone)]
 pub struct Value {
-    inner: ValueInner,
+    hash: Hash,
+    inner: Arc<ValueInner>,
 }
 
-#[derive(Clone, PartialEq)]
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash
+    }
+}
+
+#[derive(Clone)]
 pub(crate) enum ValueInner {
     /// A positive integer value.
     PosInt{ inner: u64 },
@@ -38,23 +52,33 @@ impl Value {
     }
 
     pub(crate) fn inner_posint(inner: u64) -> Self {
+        let mut hash = blake3::Hasher::new();
+        hash.update(&[TAG_POSINT]);
+        hash.update(&inner.to_le_bytes());
+        let hash = hash.finalize();
         Value {
-            inner: ValueInner::PosInt { inner },
+            hash,
+            inner: Arc::new(ValueInner::PosInt { inner }),
         }
     }
 
     pub(crate) fn inner_negint(inner: u64) -> Self {
+        let mut hash = blake3::Hasher::new();
+        hash.update(&[TAG_NEGINT]);
+        hash.update(&inner.to_le_bytes());
+        let hash = hash.finalize();
         Value {
-            inner: ValueInner::NegInt { inner },
+            hash,
+            inner: Arc::new(ValueInner::NegInt { inner }),
         }
     }
 }
 
 impl Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.inner {
+        match &*self.inner {
             ValueInner::PosInt { inner } => write!(f, "PosInt({})", inner),
-            ValueInner::NegInt { inner } => write!(f, "NegInt({})", -(inner as i128) - 1),
+            ValueInner::NegInt { inner } => write!(f, "NegInt({})", -(*inner as i128) - 1),
         }
     }
 }

@@ -1,8 +1,9 @@
 mod action;
 mod packed;
 
-pub use action::Action;
 pub use packed::PackedMessage;
+
+pub(crate) use action::Action;
 
 use crate::Result;
 
@@ -13,8 +14,12 @@ pub struct Message {
 }
 
 impl Message {
-    pub fn new(actions: Vec<Action>) -> Self {
+    pub(crate) fn new(actions: Vec<Action>) -> Self {
         Self { actions }
+    }
+
+    pub(crate) fn actions(&self) -> &[Action] {
+        &self.actions
     }
 
     pub fn from_packed(packed: PackedMessage) -> Result<Self> {
