@@ -3,6 +3,7 @@ mod document;
 mod error;
 mod message;
 mod producer;
+mod state;
 mod value;
 
 pub use consumer::Consumer;
@@ -12,6 +13,7 @@ pub use message::{Message, PackedMessage};
 pub use producer::Producer;
 pub use value::{Value, ValueKind};
 
+pub(crate) use state::State;
 pub(crate) use value::ValueInner;
 
 #[cfg(test)]

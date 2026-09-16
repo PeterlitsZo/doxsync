@@ -1,0 +1,161 @@
+use std::{collections::BTreeMap, sync::Arc};
+
+use crate::state::{Bitmap, Lru, StateTxn};
+
+pub(crate) struct State {
+    pub(super) string_pool: BTreeMap<u32, Arc<String>>,
+    pub(super) string_pool_size: usize,
+    pub(super) string_pool_bitmap: Bitmap,
+    pub(super) string_pool_reverse: BTreeMap<Arc<String>, u32>,
+    pub(super) string_pool_lru: Lru<Arc<String>>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        let default_string_pool_size = 1024;
+        Self {
+            string_pool: BTreeMap::new(),
+            string_pool_size: default_string_pool_size,
+            string_pool_bitmap: Bitmap::new(default_string_pool_size),
+            string_pool_reverse: BTreeMap::new(),
+            string_pool_lru: Lru::new(default_string_pool_size),
+        }
+    }
+}
+
+impl State {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Begin a transaction.
+    pub(crate) fn txn(self) -> StateTxn {
+        StateTxn::new(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::state::{InsertStringResult, State};
+
+    #[test]
+    fn state_txn_commit_keeps_changes() {
+        let state = State::new();
+
+        let mut txn = state.txn();
+        assert_eq!(
+            txn.insert_string(Arc::new("tmp-0000".to_string())),
+            InsertStringResult::Inserted { key: 0 }
+        );
+        assert_eq!(
+            txn.insert_string(Arc::new("tmp-0001".to_string())),
+            InsertStringResult::Inserted { key: 1 }
+        );
+        let state = txn.commit();
+
+        let mut txn = state.txn();
+        assert_eq!(
+            txn.insert_string(Arc::new("tmp-0002".to_string())),
+            InsertStringResult::Inserted { key: 2 }
+        );
+        assert_eq!(
+            txn.insert_string(Arc::new("tmp-0000".to_string())),
+            InsertStringResult::Existing { key: 0 }
+        );
+        let state = txn.commit();
+
+        let mut txn = state.txn();
+        assert_eq!(
+            txn.insert_string(Arc::new("tmp-0002".to_string())),
+            InsertStringResult::Existing { key: 2 }
+        );
+        assert_eq!(
+            txn.insert_string(Arc::new("tmp-0003".to_string())),
+            InsertStringResult::Inserted { key: 3 }
+        );
+        let state = txn.rollback();
+
+        let mut txn = state.txn();
+        assert_eq!(
+            txn.insert_string(Arc::new("tmp-0004".to_string())),
+            InsertStringResult::Inserted { key: 3 }
+        );
+        let state = txn.commit();
+
+        assert_eq!(
+            state.string_pool_lru.recent_keys(),
+            &[
+                &Arc::new("tmp-0004".to_string()),
+                &Arc::new("tmp-0000".to_string()),
+                &Arc::new("tmp-0002".to_string()),
+                &Arc::new("tmp-0001".to_string()),
+            ]
+        );
+
+        let mut txn = state.txn();
+        assert_eq!(
+            txn.insert_string(Arc::new("tmp-0003".to_string())),
+            InsertStringResult::Inserted { key: 4 }
+        );
+        for i in 5..1024 {
+            let key = Arc::new(format!("tmp-{:04}", i));
+            assert_eq!(
+                txn.insert_string(key),
+                InsertStringResult::Inserted { key: i }
+            );
+        }
+        let state = txn.commit();
+
+        let mut txn = state.txn();
+        // If we try to insert existing string, it should reuse the existing
+        // key.
+        assert_eq!(
+            txn.insert_string(Arc::new("tmp-0004".to_string())),
+            InsertStringResult::Existing { key: 3 }
+        );
+        // But if we insert a new string, it should evict the least recently
+        // used key.
+        assert_eq!(
+            txn.insert_string(Arc::new("tmp-1024".to_string())),
+            InsertStringResult::Replaced { key: 1 }
+        );
+        let state = txn.commit();
+
+        let recent_keys = state.string_pool_lru.recent_keys();
+        assert_eq!(
+            &recent_keys[..4],
+            &[
+                &Arc::new("tmp-1024".to_string()),
+                &Arc::new("tmp-0004".to_string()),
+                &Arc::new("tmp-1023".to_string()),
+                &Arc::new("tmp-1022".to_string()),
+            ]
+        );
+        assert_eq!(
+            &recent_keys[recent_keys.len() - 4..],
+            &[
+                &Arc::new("tmp-0005".to_string()),
+                &Arc::new("tmp-0003".to_string()),
+                &Arc::new("tmp-0000".to_string()),
+                &Arc::new("tmp-0002".to_string()),
+            ]
+        );
+
+        let mut txn = state.txn();
+        assert_eq!(
+            txn.insert_string(Arc::new("tmp-1025".to_string())),
+            InsertStringResult::Replaced { key: 2 }
+        );
+        assert_eq!(
+            txn.insert_string(Arc::new("tmp-1026".to_string())),
+            InsertStringResult::Replaced { key: 0 }
+        );
+        assert_eq!(
+            txn.insert_string(Arc::new("tmp-1027".to_string())),
+            InsertStringResult::Replaced { key: 4 }
+        );
+        let _state = txn.commit();
+    }
+}

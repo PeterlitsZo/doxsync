@@ -1,9 +1,8 @@
-use crate::{
-    Document, Message, Result, ValueKind,
-    message::{Action, Path, PathSegment},
-};
+use crate::message::{Action, Path, PathSegment};
+use crate::{Document, Message, Result, State, ValueKind};
 
 pub struct Producer {
+    state: State,
     current_document: Document,
     last_emited_document: Option<Document>,
 }
@@ -11,6 +10,7 @@ pub struct Producer {
 impl Producer {
     pub fn new(current_document: Document) -> Self {
         Self {
+            state: State::new(),
             current_document,
             last_emited_document: None,
         }

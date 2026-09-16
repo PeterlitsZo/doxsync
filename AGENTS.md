@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Behavior
+
+- DO NOT add unit tests until the user asks you to do.
+
 ## When You Need to Commit
 
 WHEN THE USER ASKS YOU TO COMMIT, you MUST follow this section.

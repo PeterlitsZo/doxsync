@@ -1,15 +1,17 @@
-use crate::{
-    Document, Error, ErrorKind, Message, Result, Value,
-    message::{Action, PathSegment},
-};
+use crate::message::{Action, PathSegment};
+use crate::{Document, Error, ErrorKind, Message, Result, State, Value};
 
 pub struct Consumer {
+    state: State,
     document: Option<Document>,
 }
 
 impl Consumer {
     pub fn new() -> Self {
-        Self { document: None }
+        Self {
+            state: State::new(),
+            document: None,
+        }
     }
 
     pub fn document(&self) -> Option<&Document> {
