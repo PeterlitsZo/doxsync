@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use crate::{
     Error, ErrorKind, Result, Value,
-    message::{Action, Message},
+    message::{Action, Message, Path, PathSegment},
 };
 
 const TAG_POSINT: u8 = 0b0000;
@@ -153,8 +153,67 @@ impl PackedMessageDecoder {
                 let value = Self::unpack_value(bytes)?;
                 Ok(Action::Snapshot { value })
             }
+            1 => {
+                let path = Self::unpack_path(bytes)?;
+                let value = Self::unpack_value(bytes)?;
+                Ok(Action::Add { path, value })
+            }
+            2 => {
+                let path = Self::unpack_path(bytes)?;
+                Ok(Action::Delete { path })
+            }
             _ => Err(Error::new(ErrorKind::InvalidData, "invalid action type")),
         }
+    }
+
+    fn unpack_path(bytes: &mut &[u8]) -> Result<Path> {
+        fn unexpected_end_of_path() -> Error {
+            Error::new(ErrorKind::InvalidData, "unexpected end of path")
+        }
+
+        let segments_len = Self::unpack_varuint(bytes)?;
+        let mut segments = Vec::new();
+        for index in 0..segments_len {
+            let segment =
+                Self::unpack_varuint(bytes).map_err(|e| e.with_context("unpack path segment"))?;
+            let segment_value = segment >> 2;
+            match segment & 0b11 {
+                0b00 => {
+                    let key_len = usize::try_from(segment_value).map_err(|_| {
+                        Error::new(ErrorKind::InvalidData, "path key too large")
+                            .with_metadata("index", index)
+                    })?;
+                    let key_bytes = bytes.get(..key_len).ok_or_else(|| {
+                        unexpected_end_of_path()
+                            .with_metadata("index", index)
+                            .with_metadata("key_len", key_len)
+                    })?;
+                    let key = std::str::from_utf8(key_bytes)
+                        .map_err(|_| {
+                            Error::new(ErrorKind::InvalidData, "invalid UTF-8 path key")
+                                .with_metadata("index", index)
+                        })?
+                        .to_owned();
+                    *bytes = bytes.get(key_len..).ok_or_else(unexpected_end_of_path)?;
+                    segments.push(PathSegment::key(key));
+                }
+                0b01 => {
+                    let item_index = usize::try_from(segment_value).map_err(|_| {
+                        Error::new(ErrorKind::InvalidData, "path index too large")
+                            .with_metadata("index", index)
+                    })?;
+                    segments.push(PathSegment::index(item_index));
+                }
+                _ => {
+                    return Err(
+                        Error::new(ErrorKind::InvalidData, "invalid path segment type")
+                            .with_metadata("index", index),
+                    );
+                }
+            }
+        }
+
+        Ok(Path::new(segments))
     }
 
     fn unpack_value(bytes: &mut &[u8]) -> Result<Value> {
@@ -311,7 +370,7 @@ impl PackedMessageDecoder {
         Ok(value)
     }
 
-    fn unpack_map(bytes: &mut &[u8]) -> Result<BTreeMap<String, Value>> {
+    fn unpack_map(bytes: &mut &[u8]) -> Result<BTreeMap<Arc<String>, Value>> {
         fn unexpected_end_of_value() -> Error {
             Error::new(ErrorKind::InvalidData, "unexpected end of value")
         }
@@ -383,7 +442,7 @@ impl PackedMessageDecoder {
 
             let item_value =
                 Self::unpack_value(bytes).map_err(|e| e.with_context("unpack map value"))?;
-            if value.insert(key, item_value).is_some() {
+            if value.insert(Arc::new(key), item_value).is_some() {
                 return Err(Error::new(ErrorKind::InvalidData, "duplicate map key")
                     .with_metadata("index", index));
             }
@@ -435,6 +494,15 @@ impl<'a> PackedMessageBuilder<'a> {
                 Action::Snapshot { value } => {
                     Self::pack_varuint(&mut bytes, 0);
                     Self::pack_value(&mut bytes, value);
+                }
+                Action::Add { path, value } => {
+                    Self::pack_varuint(&mut bytes, 1);
+                    Self::pack_path(&mut bytes, path);
+                    Self::pack_value(&mut bytes, value);
+                }
+                Action::Delete { path } => {
+                    Self::pack_varuint(&mut bytes, 2);
+                    Self::pack_path(&mut bytes, path);
                 }
             }
         }
@@ -535,7 +603,7 @@ impl<'a> PackedMessageBuilder<'a> {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn pack_map(bytes: &mut Vec<u8>, value: &BTreeMap<String, Value>) {
+    fn pack_map(bytes: &mut Vec<u8>, value: &BTreeMap<Arc<String>, Value>) {
         let value_len = value.len();
 
         if value_len <= map::INLINE as usize {
@@ -558,6 +626,21 @@ impl<'a> PackedMessageBuilder<'a> {
             Self::pack_varuint(bytes, key.len() as u64);
             bytes.extend_from_slice(key.as_bytes());
             Self::pack_value(bytes, value);
+        }
+    }
+
+    fn pack_path(bytes: &mut Vec<u8>, path: &Path) {
+        Self::pack_varuint(bytes, path.segments().len() as u64);
+        for segment in path.segments() {
+            match segment {
+                PathSegment::Key(key) => {
+                    Self::pack_varuint(bytes, (key.len() as u64) << 2 | 0b00);
+                    bytes.extend_from_slice(key.as_bytes());
+                }
+                PathSegment::Index(index) => {
+                    Self::pack_varuint(bytes, (*index as u64) << 2 | 0b01);
+                }
+            }
         }
     }
 }

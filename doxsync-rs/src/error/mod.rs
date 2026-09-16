@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, fmt::{Debug, Display}};
+use std::{
+    collections::BTreeMap,
+    fmt::{Debug, Display},
+};
 
 pub struct Error {
     kind: ErrorKind,
@@ -9,7 +12,12 @@ pub struct Error {
 
 impl Error {
     pub fn new(kind: ErrorKind, message: &'static str) -> Self {
-        Self { kind, message, context: vec![], metadata: BTreeMap::new() }
+        Self {
+            kind,
+            message,
+            context: vec![],
+            metadata: BTreeMap::new(),
+        }
     }
 
     pub fn kind(&self) -> ErrorKind {
@@ -66,6 +74,8 @@ pub enum ErrorKind {
     Internal,
     /// The data is invalid.
     InvalidData,
+    /// The value's type is unexpected.
+    UnexpectedType,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

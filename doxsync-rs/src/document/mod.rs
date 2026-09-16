@@ -1,8 +1,10 @@
 use std::fmt::Debug;
 
-use crate::Value;
+use crate::{Result, Value};
 
 /// The doxsync document type.
+///
+/// Very cheap to clone.
 #[derive(Clone)]
 pub struct Document {
     value: Value,
@@ -27,5 +29,14 @@ impl Document {
 
     pub fn value(&self) -> Value {
         self.value.clone()
+    }
+
+    pub fn modify<F>(&self, f: F) -> Result<Self>
+    where
+        F: FnOnce(&mut Value) -> Result<()>,
+    {
+        let mut value = self.value.clone();
+        f(&mut value)?;
+        Ok(Self { value })
     }
 }

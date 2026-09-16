@@ -3,7 +3,7 @@ mod packed;
 
 pub use packed::PackedMessage;
 
-pub(crate) use action::Action;
+pub(crate) use action::{Action, Path, PathSegment};
 
 use crate::Result;
 
@@ -36,7 +36,7 @@ impl Message {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, sync::Arc};
 
     use crate::Value;
 
@@ -49,7 +49,7 @@ mod tests {
         loop {
             let byte = hex_chars[i];
             match byte {
-                ' ' | '\n' => {}
+                ' ' | '\n' | '+' | '|' | '-' => {}
                 '/' => {
                     // Comment begin with '//'...
                     i += 1;
@@ -197,8 +197,8 @@ mod tests {
         // =====================================================================
 
         let mut map = BTreeMap::new();
-        map.insert("answer".to_owned(), Value::int(42).unwrap());
-        map.insert("pi".to_owned(), Value::float(3.1415926).unwrap());
+        map.insert(Arc::new("answer".to_owned()), Value::int(42).unwrap());
+        map.insert(Arc::new("pi".to_owned()), Value::float(3.1415926).unwrap());
         let value = Value::map(map).unwrap();
         let message = Message::new(vec![Action::Snapshot {
             value: value.clone(),
@@ -210,16 +210,49 @@ mod tests {
             hex_to_bytes(indoc::indoc! { r#"
                 00
                 01
-                  00
-                    52
-                      06 61 6e 73 77 65 72       // key "answer"
-                      0c 2a                      // value int(42)
-                      02 70 69                   // key "pi"
-                      7b 4a d8 12 4d fb 21 09 40 // value float(3.1415926)
+                  + 00
+                      + 52
+                          + 06 61 6e 73 77 65 72 // key "answer"
+                          + 0c 2a // value int(42)
+                          + 02 70 69 // key "pi"
+                          + 7b 4a d8 12 4d fb 21 09 40 // value float(3.1415926)
             "# })
         );
 
         let unpacked = Message::from_packed(packed).unwrap();
-        assert_eq!(unpacked.actions, &[Action::Snapshot { value },]);
+        assert_eq!(unpacked.actions, &[Action::Snapshot { value }]);
+
+        // Case 8:
+        // =====================================================================
+
+        let message = Message::new(vec![
+            Action::Add {
+                path: Path::new(vec![PathSegment::key("foo"), PathSegment::index(42)]),
+                value: Value::int(42).unwrap(),
+            },
+            Action::Delete {
+                path: Path::new(vec![PathSegment::key("bar")]),
+            },
+        ]);
+
+        let packed = message.packed();
+        assert_eq!(
+            packed.bytes(),
+            hex_to_bytes(indoc::indoc! { r#"
+                00
+                02
+                  + 01
+                  |   + 02 // path "foo.42"
+                  |   |   + 0c 66 6f 6f
+                  |   |   + a9 01
+                  |   + 0c 2a // value int(42)
+                  + 02
+                      + 01 // path "bar"
+                          + 0c 62 61 72
+            "# })
+        );
+
+        let unpacked = Message::from_packed(packed).unwrap();
+        assert_eq!(unpacked, message);
     }
 }

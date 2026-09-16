@@ -10,7 +10,7 @@ pub use document::Document;
 pub use error::{Error, ErrorKind, Result};
 pub use message::{Message, PackedMessage};
 pub use producer::Producer;
-pub use value::Value;
+pub use value::{Value, ValueKind};
 
 pub(crate) use value::ValueInner;
 
