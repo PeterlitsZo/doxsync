@@ -5,12 +5,15 @@ use blake3::Hash;
 use crate::{Error, ErrorKind, Result};
 
 const TAG_POSINT: u8 = 0x00;
-const TAG_NEGINT: u8 = 0x01;
-const TAG_BSTR: u8 = 0x02;
-const TAG_TSTR: u8 = 0x03;
-const TAG_ARRAY: u8 = 0x04;
-const TAG_MAP: u8 = 0x05;
-const TAG_FLOAT: u8 = 0x07;
+const TAG_NEGINT: u8 = 0x10;
+const TAG_BSTR: u8 = 0x20;
+const TAG_TSTR: u8 = 0x30;
+const TAG_ARRAY: u8 = 0x40;
+const TAG_MAP: u8 = 0x50;
+const TAG_FLOAT: u8 = 0x70;
+const TAG_FALSE: u8 = TAG_FLOAT | 0x04;
+const TAG_TRUE: u8 = TAG_FLOAT | 0x05;
+const TAG_NULL: u8 = TAG_FLOAT | 0x06;
 
 /// The doxsync value type.
 ///
@@ -33,6 +36,10 @@ pub(crate) enum ValueInner {
     PosInt { inner: u64 },
     /// A negative integer value.
     NegInt { inner: u64 },
+    /// A null value.
+    Null,
+    /// A boolean value.
+    Bool { inner: bool },
     /// A floating-point value.
     Float { inner: f64 },
     /// A binary string value.
@@ -66,6 +73,16 @@ impl Value {
             }
             Ok(Value::inner_negint((-value - 1) as u64))
         }
+    }
+
+    /// Creates a null value.
+    pub fn null() -> Result<Self> {
+        Ok(Value::inner_null())
+    }
+
+    /// Creates a boolean value.
+    pub fn bool(value: bool) -> Result<Self> {
+        Ok(Value::inner_bool(value))
     }
 
     /// Creates a 64-bit floating-point value.
@@ -108,6 +125,8 @@ impl Value {
     pub fn kind(&self) -> ValueKind {
         match &*self.inner {
             ValueInner::PosInt { .. } | ValueInner::NegInt { .. } => ValueKind::Int,
+            ValueInner::Null => ValueKind::Null,
+            ValueInner::Bool { .. } => ValueKind::Bool,
             ValueInner::Float { .. } => ValueKind::Float,
             ValueInner::BStr { .. } => ValueKind::BStr,
             ValueInner::TStr { .. } => ValueKind::TStr,
@@ -118,6 +137,17 @@ impl Value {
 }
 
 impl Value {
+    pub fn is_null(&self) -> bool {
+        matches!(&*self.inner, ValueInner::Null)
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match &*self.inner {
+            ValueInner::Bool { inner } => Some(*inner),
+            _ => None,
+        }
+    }
+
     pub fn as_int(&self) -> Option<i128> {
         match &*self.inner {
             ValueInner::PosInt { inner } => Some(*inner as i128),
@@ -177,6 +207,22 @@ impl Value {
             Err(Error::new(
                 ErrorKind::UnexpectedType,
                 "expected an int value",
+            ))
+        }
+    }
+
+    pub fn as_bool_and_modify<F>(&self, f: F) -> Result<Self>
+    where
+        F: FnOnce(&mut bool) -> Result<()>,
+    {
+        if let ValueInner::Bool { inner } = &*self.inner {
+            let mut inner = *inner;
+            f(&mut inner)?;
+            Value::bool(inner)
+        } else {
+            Err(Error::new(
+                ErrorKind::UnexpectedType,
+                "expected a bool value",
             ))
         }
     }
@@ -291,6 +337,22 @@ impl Value {
         }
     }
 
+    pub(crate) fn inner_null() -> Self {
+        let hash = blake3::hash(&[TAG_NULL]);
+        Value {
+            hash,
+            inner: Arc::new(ValueInner::Null),
+        }
+    }
+
+    pub(crate) fn inner_bool(inner: bool) -> Self {
+        let hash = blake3::hash(&[if inner { TAG_TRUE } else { TAG_FALSE }]);
+        Value {
+            hash,
+            inner: Arc::new(ValueInner::Bool { inner }),
+        }
+    }
+
     pub(crate) fn inner_float(inner: f64) -> Self {
         let mut hash = blake3::Hasher::new();
         hash.update(&[TAG_FLOAT]);
@@ -363,6 +425,8 @@ impl Debug for Value {
         match &*self.inner {
             ValueInner::PosInt { inner } => write!(f, "Int({})", inner),
             ValueInner::NegInt { inner } => write!(f, "Int({})", -(*inner as i128) - 1),
+            ValueInner::Null => write!(f, "Null"),
+            ValueInner::Bool { inner } => write!(f, "Bool({})", inner),
             ValueInner::Float { inner } => write!(f, "Float({})", inner),
             ValueInner::BStr { inner } => write!(f, "BStr({:?})", inner),
             ValueInner::TStr { inner } => write!(f, "TStr({:?})", inner),
@@ -375,6 +439,8 @@ impl Debug for Value {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueKind {
     Int,
+    Null,
+    Bool,
     Float,
     BStr,
     TStr,

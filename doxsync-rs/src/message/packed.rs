@@ -56,6 +56,9 @@ mod array {
 }
 
 mod float {
+    pub(crate) const FALSE: u8 = 4;
+    pub(crate) const TRUE: u8 = 5;
+    pub(crate) const NULL: u8 = 6;
     pub(crate) const BITS_64: u8 = 11;
 }
 
@@ -293,6 +296,7 @@ impl PackedMessageDecoder {
         Ok(Path::new(segments))
     }
 
+    #[rustfmt::skip]
     fn unpack_value(bytes: &mut &[u8], state: &ConsumerState) -> Result<Value> {
         // Get the first byte to determine the value type.
         let value_type = bytes.get(0).ok_or(Error::new(
@@ -300,46 +304,18 @@ impl PackedMessageDecoder {
             "unexpected end of value",
         ))?;
         match value_type >> TAG_WIDTH {
-            TAG_POSINT => {
-                let value =
-                    Self::unpack_posint(bytes).map_err(|e| e.with_context("unpack posint"))?;
-                Ok(Value::inner_posint(value))
-            }
-            TAG_NEGINT => {
-                let value =
-                    Self::unpack_negint(bytes).map_err(|e| e.with_context("unpack negint"))?;
-                Ok(Value::inner_negint(value))
-            }
-            TAG_BSTR => {
-                let value =
-                    Self::unpack_bstr(bytes).map_err(|e| e.with_context("unpack binary string"))?;
-                Ok(Value::inner_bstr(value))
-            }
-            TAG_TSTR => {
-                let value =
-                    Self::unpack_tstr(bytes).map_err(|e| e.with_context("unpack text string"))?;
-                Ok(Value::inner_tstr(value))
-            }
-            TAG_ARRAY => {
-                let value =
-                    Self::unpack_array(bytes, state).map_err(|e| e.with_context("unpack array"))?;
-                Ok(Value::inner_array(value))
-            }
-            TAG_FLOAT => {
-                let value =
-                    Self::unpack_float(bytes).map_err(|e| e.with_context("unpack float"))?;
-                Ok(Value::inner_float(value))
-            }
-            TAG_MAP => {
-                let value =
-                    Self::unpack_map(bytes, state).map_err(|e| e.with_context("unpack map"))?;
-                Ok(Value::inner_map(value))
-            }
+            TAG_POSINT => Self::unpack_posint(bytes).map_err(|e| e.with_context("unpack posint")),
+            TAG_NEGINT => Self::unpack_negint(bytes).map_err(|e| e.with_context("unpack negint")),
+            TAG_BSTR => Self::unpack_bstr(bytes).map_err(|e| e.with_context("unpack binary string")),
+            TAG_TSTR => Self::unpack_tstr(bytes).map_err(|e| e.with_context("unpack text string")),
+            TAG_ARRAY => Self::unpack_array(bytes, state).map_err(|e| e.with_context("unpack array")),
+            TAG_FLOAT => Self::unpack_simple_or_float(bytes).map_err(|e| e.with_context("unpack simple value or float")),
+            TAG_MAP => Self::unpack_map(bytes, state).map_err(|e| e.with_context("unpack map")),
             _ => Err(Error::new(ErrorKind::InvalidData, "invalid value type")),
         }
     }
 
-    fn unpack_posint(bytes: &mut &[u8]) -> Result<u64> {
+    fn unpack_posint(bytes: &mut &[u8]) -> Result<Value> {
         fn unexpected_end_of_value() -> Error {
             Error::new(ErrorKind::InvalidData, "unexpected end of value")
         }
@@ -353,7 +329,7 @@ impl PackedMessageDecoder {
             *bytes = bytes
                 .get(1..)
                 .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
-            return Ok(first_byte as u64);
+            return Ok(Value::inner_posint(first_byte as u64));
         } else if first_byte == posint::BITS_8 {
             let bytes_to_parse = bytes
                 .get(1..2)
@@ -361,7 +337,7 @@ impl PackedMessageDecoder {
             let bytes_ptr = bytes_to_parse as *const [u8] as *const u8;
             let value = u8::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 1]) });
             *bytes = bytes.get(2..).ok_or_else(unexpected_end_of_value)?;
-            Ok(value as u64)
+            Ok(Value::inner_posint(value as u64))
         } else if first_byte == posint::BITS_16 {
             let bytes_to_parse = bytes
                 .get(1..3)
@@ -369,7 +345,7 @@ impl PackedMessageDecoder {
             let bytes_ptr = bytes_to_parse as *const [u8] as *const u8;
             let value = u16::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 2]) });
             *bytes = bytes.get(3..).ok_or_else(unexpected_end_of_value)?;
-            Ok(value as u64)
+            Ok(Value::inner_posint(value as u64))
         } else if first_byte == posint::BITS_32 {
             let bytes_to_parse = bytes
                 .get(1..5)
@@ -377,7 +353,7 @@ impl PackedMessageDecoder {
             let bytes_ptr = bytes_to_parse as *const [u8] as *const u8;
             let value = u32::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 4]) });
             *bytes = bytes.get(5..).ok_or_else(unexpected_end_of_value)?;
-            Ok(value as u64)
+            Ok(Value::inner_posint(value as u64))
         } else {
             let bytes_to_parse = bytes
                 .get(1..9)
@@ -385,11 +361,11 @@ impl PackedMessageDecoder {
             let bytes_ptr = bytes_to_parse as *const [u8] as *const u8;
             let value = u64::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 8]) });
             *bytes = bytes.get(9..).ok_or_else(unexpected_end_of_value)?;
-            Ok(value as u64)
+            Ok(Value::inner_posint(value))
         }
     }
 
-    fn unpack_negint(bytes: &mut &[u8]) -> Result<u64> {
+    fn unpack_negint(bytes: &mut &[u8]) -> Result<Value> {
         fn unexpected_end_of_value() -> Error {
             Error::new(ErrorKind::InvalidData, "unexpected end of value")
         }
@@ -403,7 +379,7 @@ impl PackedMessageDecoder {
             *bytes = bytes
                 .get(1..)
                 .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
-            return Ok(first_byte as u64);
+            return Ok(Value::inner_negint(first_byte as u64));
         } else if first_byte == negint::BITS_8 {
             let bytes_to_parse = bytes
                 .get(1..2)
@@ -411,7 +387,7 @@ impl PackedMessageDecoder {
             let bytes_ptr = bytes_to_parse as *const [u8] as *const u8;
             let value = u8::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 1]) });
             *bytes = bytes.get(2..).ok_or_else(unexpected_end_of_value)?;
-            Ok(value as u64)
+            Ok(Value::inner_negint(value as u64))
         } else if first_byte == negint::BITS_16 {
             let bytes_to_parse = bytes
                 .get(1..3)
@@ -419,7 +395,7 @@ impl PackedMessageDecoder {
             let bytes_ptr = bytes_to_parse as *const [u8] as *const u8;
             let value = u16::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 2]) });
             *bytes = bytes.get(3..).ok_or_else(unexpected_end_of_value)?;
-            Ok(value as u64)
+            Ok(Value::inner_negint(value as u64))
         } else if first_byte == negint::BITS_32 {
             let bytes_to_parse = bytes
                 .get(1..5)
@@ -427,7 +403,7 @@ impl PackedMessageDecoder {
             let bytes_ptr = bytes_to_parse as *const [u8] as *const u8;
             let value = u32::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 4]) });
             *bytes = bytes.get(5..).ok_or_else(unexpected_end_of_value)?;
-            Ok(value as u64)
+            Ok(Value::inner_negint(value as u64))
         } else {
             let bytes_to_parse = bytes
                 .get(1..9)
@@ -435,11 +411,11 @@ impl PackedMessageDecoder {
             let bytes_ptr = bytes_to_parse as *const [u8] as *const u8;
             let value = u64::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 8]) });
             *bytes = bytes.get(9..).ok_or_else(unexpected_end_of_value)?;
-            Ok(value as u64)
+            Ok(Value::inner_negint(value))
         }
     }
 
-    fn unpack_bstr(bytes: &mut &[u8]) -> Result<Vec<u8>> {
+    fn unpack_bstr(bytes: &mut &[u8]) -> Result<Value> {
         fn unexpected_end_of_value() -> Error {
             Error::new(ErrorKind::InvalidData, "unexpected end of value")
         }
@@ -501,10 +477,10 @@ impl PackedMessageDecoder {
             .to_vec();
         *bytes = bytes.get(value_len..).ok_or_else(unexpected_end_of_value)?;
 
-        Ok(value)
+        Ok(Value::inner_bstr(value))
     }
 
-    fn unpack_tstr(bytes: &mut &[u8]) -> Result<String> {
+    fn unpack_tstr(bytes: &mut &[u8]) -> Result<Value> {
         fn unexpected_end_of_value() -> Error {
             Error::new(ErrorKind::InvalidData, "unexpected end of value")
         }
@@ -566,10 +542,39 @@ impl PackedMessageDecoder {
             .to_owned();
         *bytes = bytes.get(value_len..).ok_or_else(unexpected_end_of_value)?;
 
-        Ok(value)
+        Ok(Value::inner_tstr(value))
     }
 
-    fn unpack_float(bytes: &mut &[u8]) -> Result<f64> {
+    fn unpack_simple_or_float(bytes: &mut &[u8]) -> Result<Value> {
+        fn unexpected_end_of_value() -> Error {
+            Error::new(ErrorKind::InvalidData, "unexpected end of value")
+        }
+
+        let first_byte = bytes.get(0).ok_or_else(unexpected_end_of_value)?;
+        let first_byte_payload = *first_byte & PAYLOAD_MASK;
+
+        match first_byte_payload {
+            float::FALSE => {
+                *bytes = bytes.get(1..).ok_or_else(unexpected_end_of_value)?;
+                Ok(Value::inner_bool(false))
+            }
+            float::TRUE => {
+                *bytes = bytes.get(1..).ok_or_else(unexpected_end_of_value)?;
+                Ok(Value::inner_bool(true))
+            }
+            float::NULL => {
+                *bytes = bytes.get(1..).ok_or_else(unexpected_end_of_value)?;
+                Ok(Value::inner_null())
+            }
+            float::BITS_64 => Self::unpack_float(bytes),
+            _ => Err(
+                Error::new(ErrorKind::InvalidData, "invalid simple value or float")
+                    .with_metadata("first_byte", first_byte),
+            ),
+        }
+    }
+
+    fn unpack_float(bytes: &mut &[u8]) -> Result<Value> {
         fn unexpected_end_of_value() -> Error {
             Error::new(ErrorKind::InvalidData, "unexpected end of value")
         }
@@ -590,10 +595,10 @@ impl PackedMessageDecoder {
         let value = f64::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 8]) });
         *bytes = bytes.get(9..).ok_or_else(unexpected_end_of_value)?;
 
-        Ok(value)
+        Ok(Value::inner_float(value))
     }
 
-    fn unpack_array(bytes: &mut &[u8], state: &ConsumerState) -> Result<Vec<Value>> {
+    fn unpack_array(bytes: &mut &[u8], state: &ConsumerState) -> Result<Value> {
         fn unexpected_end_of_value() -> Error {
             Error::new(ErrorKind::InvalidData, "unexpected end of value")
         }
@@ -656,13 +661,10 @@ impl PackedMessageDecoder {
             value.push(item_value);
         }
 
-        Ok(value)
+        Ok(Value::inner_array(value))
     }
 
-    fn unpack_map(
-        bytes: &mut &[u8],
-        state: &ConsumerState,
-    ) -> Result<BTreeMap<Arc<String>, Value>> {
+    fn unpack_map(bytes: &mut &[u8], state: &ConsumerState) -> Result<Value> {
         fn unexpected_end_of_value() -> Error {
             Error::new(ErrorKind::InvalidData, "unexpected end of value")
         }
@@ -732,7 +734,7 @@ impl PackedMessageDecoder {
             }
         }
 
-        Ok(value)
+        Ok(Value::inner_map(value))
     }
 }
 
@@ -880,7 +882,12 @@ impl<'a, 's> PackedMessageBuilderInternal<'a, 's> {
                     self.extend_string_pool_patch(string_pool_patch, value);
                 }
             }
-            ValueKind::Int | ValueKind::Float | ValueKind::BStr | ValueKind::TStr => {}
+            ValueKind::Int
+            | ValueKind::Null
+            | ValueKind::Bool
+            | ValueKind::Float
+            | ValueKind::BStr
+            | ValueKind::TStr => {}
         }
     }
 
@@ -911,6 +918,8 @@ impl<'a, 's> PackedMessageBuilderInternal<'a, 's> {
         match value.inner() {
             ValueInner::PosInt { inner } => self.pack_posint(bytes, *inner),
             ValueInner::NegInt { inner } => self.pack_negint(bytes, *inner),
+            ValueInner::Null => self.pack_null(bytes),
+            ValueInner::Bool { inner } => self.pack_bool(bytes, *inner),
             ValueInner::Float { inner } => self.pack_float(bytes, *inner),
             ValueInner::BStr { inner } => self.pack_bstr(bytes, inner),
             ValueInner::TStr { inner } => self.pack_tstr(bytes, inner),
@@ -1023,6 +1032,15 @@ impl<'a, 's> PackedMessageBuilderInternal<'a, 's> {
     fn pack_float(&mut self, bytes: &mut Vec<u8>, value: f64) {
         bytes.push((TAG_FLOAT << TAG_WIDTH) | float::BITS_64);
         bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn pack_null(&mut self, bytes: &mut Vec<u8>) {
+        bytes.push((TAG_FLOAT << TAG_WIDTH) | float::NULL);
+    }
+
+    fn pack_bool(&mut self, bytes: &mut Vec<u8>, value: bool) {
+        let payload = if value { float::TRUE } else { float::FALSE };
+        bytes.push((TAG_FLOAT << TAG_WIDTH) | payload);
     }
 
     fn pack_array(&mut self, bytes: &mut Vec<u8>, value: &[Value]) {

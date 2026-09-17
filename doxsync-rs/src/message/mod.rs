@@ -264,9 +264,9 @@ mod tests {
                   |   |   + 0c 66 6f 6f
                   |   |   + a9 01
                   |   + 52 // value map
-                  |       + 00 // index of "answer"
+                  |       + 00 // index of string "answer"
                   |       + 0c 2a // value int(42)
-                  |       + 01 // index of "pi"
+                  |       + 01 // index of string "pi"
                   |       + 39 33 2e 31 34 31 35 39 32 36 // value tstr("3.1415926")
                   + 02
                       + 01 // path "bar"
@@ -276,5 +276,24 @@ mod tests {
 
         let unpacked = Message::from_packed(packed, &mut consumer_state).unwrap();
         assert_eq!(unpacked, message);
+
+        // Case 9:
+        // =====================================================================
+
+        let value = Value::array(vec![
+            Value::null().unwrap(),
+            Value::bool(false).unwrap(),
+            Value::bool(true).unwrap(),
+        ])
+        .unwrap();
+        let message = Message::new(vec![Action::Snapshot {
+            value: value.clone(),
+        }]);
+
+        let packed = message.packed(&mut producer_state_txn);
+        assert_eq!(packed.bytes(), hex_to_bytes("00 01 00 43 76 74 75"));
+
+        let unpacked = Message::from_packed(packed, &mut consumer_state).unwrap();
+        assert_eq!(unpacked.actions, &[Action::Snapshot { value }]);
     }
 }
