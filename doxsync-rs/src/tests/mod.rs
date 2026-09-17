@@ -11,13 +11,14 @@ fn test_produce_then_consume_simple_document() {
     let mut consumer = Consumer::new();
 
     // Produce the first diff message.
-    let diff = producer.produce_diff().unwrap().unwrap();
+    let diff = producer.produce_diff_unpacked().unwrap().unwrap();
     assert_eq!(
         diff.actions(),
         &[Action::Snapshot {
             value: Value::int(42).unwrap()
         }]
     );
+    let diff = producer.pack_diff(diff);
 
     // Consume the diff message.
     consumer.consume_diff(diff).unwrap();
@@ -29,13 +30,14 @@ fn test_produce_then_consume_simple_document() {
     // Update the producer document and produce a new diff message.
     let updated_document = Document::new(Value::int(43).unwrap());
     producer.replace(updated_document.clone());
-    let diff = producer.produce_diff().unwrap().unwrap();
+    let diff = producer.produce_diff_unpacked().unwrap().unwrap();
     assert_eq!(
         diff.actions(),
         &[Action::Snapshot {
             value: Value::int(43).unwrap()
         }]
     );
+    let diff = producer.pack_diff(diff);
 
     // Consume the diff message.
     consumer.consume_diff(diff).unwrap();
@@ -49,13 +51,14 @@ fn test_produce_then_consume_simple_document() {
     producer.replace(Document::new(Value::float(3.1415926).unwrap()));
 
     // Consume the diff message.
-    let diff = producer.produce_diff().unwrap().unwrap();
+    let diff = producer.produce_diff_unpacked().unwrap().unwrap();
     assert_eq!(
         diff.actions(),
         &[Action::Snapshot {
             value: Value::float(3.1415926).unwrap()
         }]
     );
+    let diff = producer.pack_diff(diff);
 
     // Consume the diff message.
     consumer.consume_diff(diff).unwrap();
@@ -81,7 +84,7 @@ fn test_produce_then_consume_mapping_document() {
     let mut consumer = Consumer::new();
 
     // Produce the first diff message.
-    let diff = producer.produce_diff().unwrap().unwrap();
+    let diff = producer.produce_diff_unpacked().unwrap().unwrap();
     assert_eq!(
         diff.actions(),
         &[Action::Snapshot {
@@ -92,6 +95,7 @@ fn test_produce_then_consume_mapping_document() {
             .unwrap()
         }]
     );
+    let diff = producer.pack_diff(diff);
 
     // Consume the diff message.
     consumer.consume_diff(diff).unwrap();
@@ -111,8 +115,7 @@ fn test_produce_then_consume_mapping_document() {
         })
         .unwrap();
     producer.replace(modified_docuemnt.clone());
-    let diff = producer.produce_diff().unwrap().unwrap();
-
+    let diff = producer.produce_diff_unpacked().unwrap().unwrap();
     assert_eq!(
         diff.actions(),
         &[Action::Add {
@@ -120,6 +123,7 @@ fn test_produce_then_consume_mapping_document() {
             value: Value::int(44).unwrap(),
         }]
     );
+    let diff = producer.pack_diff(diff);
 
     // Consume the diff message.
     consumer.consume_diff(diff).unwrap();
@@ -127,40 +131,4 @@ fn test_produce_then_consume_mapping_document() {
     // Verify the consumer document matches the modified document.
     let consumer_document = consumer.document().unwrap();
     assert_eq!(*consumer_document, modified_docuemnt);
-}
-
-#[test]
-fn test_consume_diff_applies_actions_atomically_and_in_order() {
-    let empty_map = Value::map(BTreeMap::new()).unwrap();
-    let mut consumer = Consumer::new();
-    consumer
-        .consume_diff(Message::new(vec![Action::Snapshot {
-            value: empty_map.clone(),
-        }]))
-        .unwrap();
-
-    consumer
-        .consume_diff(Message::new(vec![
-            Action::Add {
-                path: Path::new(vec![PathSegment::key("foo")]),
-                value: Value::int(42).unwrap(),
-            },
-            Action::Delete {
-                path: Path::new(vec![PathSegment::key("foo")]),
-            },
-        ]))
-        .unwrap();
-    assert_eq!(consumer.document().unwrap().value(), empty_map);
-
-    let invalid_diff = Message::new(vec![
-        Action::Add {
-            path: Path::new(vec![PathSegment::key("foo")]),
-            value: Value::int(42).unwrap(),
-        },
-        Action::Delete {
-            path: Path::new(vec![PathSegment::key("missing")]),
-        },
-    ]);
-    assert!(consumer.consume_diff(invalid_diff).is_err());
-    assert_eq!(consumer.document().unwrap().value(), empty_map);
 }

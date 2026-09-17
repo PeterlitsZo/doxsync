@@ -1,9 +1,9 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use super::{
+    ProducerState,
     bitmap::Bitmap,
     lru_txn::{LruPutResult, LruTxn},
-    state::State,
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -13,7 +13,7 @@ pub(crate) enum InsertStringResult {
     Replaced { key: u32 },
 }
 
-pub(crate) struct StateTxn {
+pub(crate) struct ProducerStateTxn {
     pub(super) string_pool: BTreeMap<u32, Arc<String>>,
     pub(super) string_pool_size: usize,
     pub(super) string_pool_bitmap: Bitmap,
@@ -22,9 +22,9 @@ pub(crate) struct StateTxn {
     pub(super) rollback_log: Vec<StateRollbackEntry>,
 }
 
-impl StateTxn {
-    pub(super) fn new(state: State) -> Self {
-        let State {
+impl ProducerStateTxn {
+    pub(super) fn new(state: ProducerState) -> Self {
+        let ProducerState {
             string_pool,
             string_pool_size,
             string_pool_bitmap,
@@ -42,7 +42,7 @@ impl StateTxn {
         }
     }
 
-    pub(crate) fn commit(self) -> State {
+    pub(crate) fn commit(self) -> ProducerState {
         let Self {
             string_pool,
             string_pool_size,
@@ -52,7 +52,7 @@ impl StateTxn {
             rollback_log: _,
         } = self;
 
-        State {
+        ProducerState {
             string_pool,
             string_pool_size,
             string_pool_bitmap,
@@ -61,7 +61,7 @@ impl StateTxn {
         }
     }
 
-    pub(crate) fn rollback(mut self) -> State {
+    pub(crate) fn rollback(mut self) -> ProducerState {
         self.rollback_all();
 
         let Self {
@@ -73,13 +73,17 @@ impl StateTxn {
             rollback_log: _,
         } = self;
 
-        State {
+        ProducerState {
             string_pool,
             string_pool_size,
             string_pool_bitmap,
             string_pool_reverse,
             string_pool_lru: string_pool_lru.rollback(),
         }
+    }
+
+    pub(crate) fn get_string_key(&self, value: &Arc<String>) -> Option<u32> {
+        self.string_pool_reverse.get(value).copied()
     }
 
     pub(crate) fn insert_string(&mut self, value: Arc<String>) -> InsertStringResult {
@@ -143,7 +147,7 @@ pub(super) enum StateRollbackEntry {
 }
 
 impl StateRollbackEntry {
-    fn undo(self, txn: &mut StateTxn) {
+    fn undo(self, txn: &mut ProducerStateTxn) {
         match self {
             Self::StringPoolInsert { key, value } => {
                 txn.string_pool_bitmap.alloc_at(key as usize);

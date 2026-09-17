@@ -13,7 +13,7 @@ pub use message::{Message, PackedMessage};
 pub use producer::Producer;
 pub use value::{Value, ValueKind};
 
-pub(crate) use state::State;
+pub(crate) use state::{ConsumerState, ProducerState};
 pub(crate) use value::ValueInner;
 
 #[cfg(test)]

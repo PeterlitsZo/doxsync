@@ -1,9 +1,8 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use crate::{
-    Error, ErrorKind, Result, Value,
-    message::{Action, Message, Path, PathSegment},
-};
+use crate::message::{Action, Message, Path, PathSegment};
+use crate::state::{ConsumerState, InsertStringResult, ProducerStateTxn};
+use crate::{Error, ErrorKind, Result, Value, ValueKind};
 
 const TAG_POSINT: u8 = 0b0000;
 const TAG_NEGINT: u8 = 0b0001;
@@ -61,33 +60,43 @@ impl PackedMessage {
 
 /// A decoder for packed doxsync messages.
 pub(super) struct PackedMessageDecoder {
-    metadata_limit: usize,
     actions_limit: usize,
 }
 
 impl Default for PackedMessageDecoder {
     fn default() -> Self {
         Self {
-            metadata_limit: 65535,
             actions_limit: 65535,
         }
     }
 }
 
 impl PackedMessageDecoder {
-    pub(super) fn decode(&self, bytes: &[u8]) -> Result<Message> {
+    pub(super) fn decode(&self, bytes: &[u8], state: &mut ConsumerState) -> Result<Message> {
         let mut bytes = bytes;
         let mut actions = Vec::new();
 
         // Unpack the metadata's length.
         let metadata_len = Self::unpack_varuint(&mut bytes)?;
-        if metadata_len > self.metadata_limit as u64 {
-            return Err(Error::new(ErrorKind::InvalidData, "metadata too large"));
-        }
 
-        // Now we do not support metadata, so it must be zero.
-        if metadata_len != 0 {
-            return Err(Error::new(ErrorKind::InvalidData, "unexpected metadata"));
+        // Unpack and apply the metadata instructions.
+        for index in 0..metadata_len {
+            let instruction = Self::unpack_varuint(&mut bytes)
+                .map_err(|e| e.with_context("unpack metadata instruction"))?;
+            match instruction {
+                0 => {
+                    let patch = Self::unpack_string_pool_patch(&mut bytes)
+                        .map_err(|e| e.with_context("unpack string pool patch"))?;
+                    state.apply_string_pool_patch(patch);
+                }
+                _ => {
+                    return Err(
+                        Error::new(ErrorKind::InvalidData, "invalid metadata instruction")
+                            .with_metadata("index", index)
+                            .with_metadata("instruction", instruction),
+                    );
+                }
+            }
         }
 
         // Unpack the actions.
@@ -96,7 +105,7 @@ impl PackedMessageDecoder {
             return Err(Error::new(ErrorKind::InvalidData, "actions too large"));
         }
         for _ in 0..actions_len {
-            let action = Self::unpack_action(&mut bytes)?;
+            let action = Self::unpack_action(&mut bytes, state)?;
             actions.push(action);
         }
 
@@ -109,6 +118,47 @@ impl PackedMessageDecoder {
         }
 
         Ok(Message { actions })
+    }
+
+    fn unpack_string_pool_patch(bytes: &mut &[u8]) -> Result<Vec<(u32, Arc<String>)>> {
+        fn unexpected_end_of_patch() -> Error {
+            Error::new(
+                ErrorKind::InvalidData,
+                "unexpected end of string pool patch",
+            )
+        }
+
+        let patch_len = Self::unpack_varuint(bytes)?;
+        let mut patch = Vec::new();
+        for index in 0..patch_len {
+            let key = Self::unpack_varuint(bytes)
+                .map_err(|e| e.with_context("unpack string pool key"))?;
+            let key = u32::try_from(key).map_err(|_| {
+                Error::new(ErrorKind::InvalidData, "string pool key too large")
+                    .with_metadata("index", index)
+            })?;
+            let value_len = Self::unpack_varuint(bytes)
+                .map_err(|e| e.with_context("unpack string pool value length"))?;
+            let value_len = usize::try_from(value_len).map_err(|_| {
+                Error::new(ErrorKind::InvalidData, "string pool value too large")
+                    .with_metadata("index", index)
+            })?;
+            let value_bytes = bytes.get(..value_len).ok_or_else(|| {
+                unexpected_end_of_patch()
+                    .with_metadata("index", index)
+                    .with_metadata("value_len", value_len)
+            })?;
+            let value = std::str::from_utf8(value_bytes)
+                .map_err(|_| {
+                    Error::new(ErrorKind::InvalidData, "invalid UTF-8 string pool value")
+                        .with_metadata("index", index)
+                })?
+                .to_owned();
+            *bytes = bytes.get(value_len..).ok_or_else(unexpected_end_of_patch)?;
+            patch.push((key, Arc::new(value)));
+        }
+
+        Ok(patch)
     }
 
     fn unpack_varuint(bytes: &mut &[u8]) -> Result<u64> {
@@ -146,16 +196,16 @@ impl PackedMessageDecoder {
         Ok(value as u64)
     }
 
-    fn unpack_action(bytes: &mut &[u8]) -> Result<Action> {
+    fn unpack_action(bytes: &mut &[u8], state: &ConsumerState) -> Result<Action> {
         let action_type = Self::unpack_varuint(bytes)?;
         match action_type {
             0 => {
-                let value = Self::unpack_value(bytes)?;
+                let value = Self::unpack_value(bytes, state)?;
                 Ok(Action::Snapshot { value })
             }
             1 => {
                 let path = Self::unpack_path(bytes)?;
-                let value = Self::unpack_value(bytes)?;
+                let value = Self::unpack_value(bytes, state)?;
                 Ok(Action::Add { path, value })
             }
             2 => {
@@ -216,7 +266,7 @@ impl PackedMessageDecoder {
         Ok(Path::new(segments))
     }
 
-    fn unpack_value(bytes: &mut &[u8]) -> Result<Value> {
+    fn unpack_value(bytes: &mut &[u8], state: &ConsumerState) -> Result<Value> {
         // Get the first byte to determine the value type.
         let value_type = bytes.get(0).ok_or(Error::new(
             ErrorKind::InvalidData,
@@ -239,7 +289,8 @@ impl PackedMessageDecoder {
                 Ok(Value::inner_float(value))
             }
             TAG_MAP => {
-                let value = Self::unpack_map(bytes).map_err(|e| e.with_context("unpack map"))?;
+                let value =
+                    Self::unpack_map(bytes, state).map_err(|e| e.with_context("unpack map"))?;
                 Ok(Value::inner_map(value))
             }
             _ => Err(Error::new(ErrorKind::InvalidData, "invalid value type")),
@@ -370,7 +421,10 @@ impl PackedMessageDecoder {
         Ok(value)
     }
 
-    fn unpack_map(bytes: &mut &[u8]) -> Result<BTreeMap<Arc<String>, Value>> {
+    fn unpack_map(
+        bytes: &mut &[u8],
+        state: &ConsumerState,
+    ) -> Result<BTreeMap<Arc<String>, Value>> {
         fn unexpected_end_of_value() -> Error {
             Error::new(ErrorKind::InvalidData, "unexpected end of value")
         }
@@ -421,28 +475,20 @@ impl PackedMessageDecoder {
 
         let mut value = BTreeMap::new();
         for index in 0..value_len {
-            let key_len =
-                Self::unpack_varuint(bytes).map_err(|e| e.with_context("unpack map key length"))?;
-            let key_len = usize::try_from(key_len).map_err(|_| {
+            let key = Self::unpack_varuint(bytes).map_err(|e| e.with_context("unpack map key"))?;
+            let key = u32::try_from(key).map_err(|_| {
                 Error::new(ErrorKind::InvalidData, "map key too large")
                     .with_metadata("index", index)
             })?;
-            let key_bytes = bytes.get(..key_len).ok_or_else(|| {
-                unexpected_end_of_value()
+            let key = state.get_string(key).ok_or_else(|| {
+                Error::new(ErrorKind::InvalidData, "map key not found in string pool")
                     .with_metadata("index", index)
-                    .with_metadata("key_len", key_len)
+                    .with_metadata("key", key)
             })?;
-            let key = std::str::from_utf8(key_bytes)
-                .map_err(|_| {
-                    Error::new(ErrorKind::InvalidData, "invalid UTF-8 map key")
-                        .with_metadata("index", index)
-                })?
-                .to_owned();
-            *bytes = bytes.get(key_len..).ok_or_else(unexpected_end_of_value)?;
 
             let item_value =
-                Self::unpack_value(bytes).map_err(|e| e.with_context("unpack map value"))?;
-            if value.insert(Arc::new(key), item_value).is_some() {
+                Self::unpack_value(bytes, state).map_err(|e| e.with_context("unpack map value"))?;
+            if value.insert(key.clone(), item_value).is_some() {
                 return Err(Error::new(ErrorKind::InvalidData, "duplicate map key")
                     .with_metadata("index", index));
             }
@@ -453,64 +499,148 @@ impl PackedMessageDecoder {
 }
 
 /// A builder to build packed doxsync messages.
-pub(super) struct PackedMessageBuilder<'a> {
+pub(super) struct PackedMessageBuilder<'a, 's> {
     actions: Option<&'a Vec<Action>>,
-    metadata_limit: usize,
+    state_txn: Option<&'s mut ProducerStateTxn>,
     actions_limit: usize,
 }
 
-impl Default for PackedMessageBuilder<'_> {
+impl Default for PackedMessageBuilder<'_, '_> {
     fn default() -> Self {
         Self {
             actions: None,
-            metadata_limit: 65535,
+            state_txn: None,
             actions_limit: 65535,
         }
     }
 }
 
-impl<'a> PackedMessageBuilder<'a> {
+impl<'a, 's> PackedMessageBuilder<'a, 's> {
     pub(super) fn with_actions(&mut self, actions: &'a Vec<Action>) -> &mut Self {
         self.actions = Some(actions);
         self
     }
 
-    pub(super) fn build(&self) -> Result<PackedMessage> {
-        let mut bytes = Vec::new();
+    pub(super) fn with_state_txn(&mut self, state_txn: &'s mut ProducerStateTxn) -> &mut Self {
+        self.state_txn = Some(state_txn);
+        self
+    }
+
+    pub(super) fn build(&mut self) -> Result<PackedMessage> {
         let actions = self
             .actions
             .ok_or(Error::new(ErrorKind::Internal, "actions not set"))?;
+        let mut state_txn = None;
+        std::mem::swap(&mut state_txn, &mut self.state_txn);
+        let Some(state_txn) = state_txn else {
+            return Err(Error::new(ErrorKind::Internal, "state_txn not set"));
+        };
 
-        // Now we do not need to pack metadata.
-        Self::pack_varuint(&mut bytes, 0);
+        let mut internal = PackedMessageBuilderInternal {
+            actions,
+            state_txn,
+            actions_limit: self.actions_limit,
+        };
+        let mut bytes = Vec::new();
+        internal.build(&mut bytes)?;
+        Ok(PackedMessage { inner: bytes })
+    }
+}
 
-        // Now we pack the actions.
-        if actions.len() > self.actions_limit {
+struct PackedMessageBuilderInternal<'a, 's> {
+    actions: &'a Vec<Action>,
+    state_txn: &'s mut ProducerStateTxn,
+    actions_limit: usize,
+}
+
+impl<'a, 's> PackedMessageBuilderInternal<'a, 's> {
+    fn build(&mut self, bytes: &mut Vec<u8>) -> Result<()> {
+        // Check that the number of actions is within the limit.
+        if self.actions.len() > self.actions_limit {
             return Err(Error::new(ErrorKind::Internal, "too many actions"));
         }
-        Self::pack_varuint(&mut bytes, actions.len() as u64);
-        for action in actions {
+
+        // Do build the metadata.
+        self.build_metadata(bytes);
+
+        // Now we pack the actions.
+        self.pack_varuint(bytes, self.actions.len() as u64);
+        for action in self.actions {
             match action {
                 Action::Snapshot { value } => {
-                    Self::pack_varuint(&mut bytes, 0);
-                    Self::pack_value(&mut bytes, value);
+                    self.pack_varuint(bytes, 0);
+                    self.pack_value(bytes, value);
                 }
                 Action::Add { path, value } => {
-                    Self::pack_varuint(&mut bytes, 1);
-                    Self::pack_path(&mut bytes, path);
-                    Self::pack_value(&mut bytes, value);
+                    self.pack_varuint(bytes, 1);
+                    self.pack_path(bytes, path);
+                    self.pack_value(bytes, value);
                 }
                 Action::Delete { path } => {
-                    Self::pack_varuint(&mut bytes, 2);
-                    Self::pack_path(&mut bytes, path);
+                    self.pack_varuint(bytes, 2);
+                    self.pack_path(bytes, path);
                 }
             }
         }
 
-        Ok(PackedMessage { inner: bytes })
+        Ok(())
     }
 
-    fn pack_varuint(bytes: &mut Vec<u8>, value: u64) {
+    fn build_metadata(&mut self, bytes: &mut Vec<u8>) {
+        let mut string_pool_patch = vec![];
+
+        for action in self.actions {
+            match action {
+                Action::Snapshot { value } => {
+                    self.extend_string_pool_patch(&mut string_pool_patch, value);
+                }
+                Action::Add { path: _, value } => {
+                    self.extend_string_pool_patch(&mut string_pool_patch, value);
+                }
+                Action::Delete { path: _ } => {}
+            }
+        }
+
+        if !string_pool_patch.is_empty() {
+            self.pack_varuint(bytes, 1);
+            self.pack_varuint(bytes, 0);
+            self.pack_varuint(bytes, string_pool_patch.len() as u64);
+            for (index, string) in string_pool_patch {
+                self.pack_varuint(bytes, index as u64);
+                let string_bytes = string.as_bytes();
+                self.pack_varuint(bytes, string_bytes.len() as u64);
+                bytes.extend_from_slice(string_bytes);
+            }
+        } else {
+            self.pack_varuint(bytes, 0);
+        }
+    }
+
+    fn extend_string_pool_patch(
+        &mut self,
+        string_pool_patch: &mut Vec<(u32, Arc<String>)>,
+        value: &Value,
+    ) {
+        match value.kind() {
+            ValueKind::Map => {
+                let map = value.as_map().expect("value MUST be map");
+                for (map_key, value) in map {
+                    let result = self.state_txn.insert_string(map_key.clone());
+                    match result {
+                        InsertStringResult::Existing { .. } => {}
+                        InsertStringResult::Inserted { key }
+                        | InsertStringResult::Replaced { key } => {
+                            string_pool_patch.push((key, map_key.clone()));
+                        }
+                    }
+                    self.extend_string_pool_patch(string_pool_patch, value);
+                }
+            }
+            ValueKind::Int | ValueKind::Float => {}
+        }
+    }
+
+    fn pack_varuint(&mut self, bytes: &mut Vec<u8>, value: u64) {
         let mut value = value;
         let mut buf = [0u8; 10];
         let mut i = 0;
@@ -531,18 +661,18 @@ impl<'a> PackedMessageBuilder<'a> {
         bytes.extend_from_slice(&buf[..i]);
     }
 
-    fn pack_value(bytes: &mut Vec<u8>, value: &Value) {
+    fn pack_value(&mut self, bytes: &mut Vec<u8>, value: &Value) {
         use crate::ValueInner;
 
         match value.inner() {
-            ValueInner::PosInt { inner } => Self::pack_posint(bytes, *inner),
-            ValueInner::NegInt { inner } => Self::pack_negint(bytes, *inner),
-            ValueInner::Float { inner } => Self::pack_float(bytes, *inner),
-            ValueInner::Map { inner } => Self::pack_map(bytes, inner),
+            ValueInner::PosInt { inner } => self.pack_posint(bytes, *inner),
+            ValueInner::NegInt { inner } => self.pack_negint(bytes, *inner),
+            ValueInner::Float { inner } => self.pack_float(bytes, *inner),
+            ValueInner::Map { inner } => self.pack_map(bytes, inner),
         }
     }
 
-    fn pack_posint(bytes: &mut Vec<u8>, value: u64) {
+    fn pack_posint(&mut self, bytes: &mut Vec<u8>, value: u64) {
         if value <= posint::INLINE as u64 {
             // Pack small values directly as bytes.
             bytes.push((TAG_POSINT << TAG_WIDTH) | (value as u8));
@@ -570,7 +700,7 @@ impl<'a> PackedMessageBuilder<'a> {
         }
     }
 
-    fn pack_negint(bytes: &mut Vec<u8>, value: u64) {
+    fn pack_negint(&mut self, bytes: &mut Vec<u8>, value: u64) {
         if value <= negint::INLINE as u64 {
             // Pack small values directly as bytes.
             bytes.push((TAG_NEGINT << TAG_WIDTH) | (value as u8));
@@ -598,12 +728,12 @@ impl<'a> PackedMessageBuilder<'a> {
         }
     }
 
-    fn pack_float(bytes: &mut Vec<u8>, value: f64) {
+    fn pack_float(&mut self, bytes: &mut Vec<u8>, value: f64) {
         bytes.push((TAG_FLOAT << TAG_WIDTH) | float::BITS_64);
         bytes.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn pack_map(bytes: &mut Vec<u8>, value: &BTreeMap<Arc<String>, Value>) {
+    fn pack_map(&mut self, bytes: &mut Vec<u8>, value: &BTreeMap<Arc<String>, Value>) {
         let value_len = value.len();
 
         if value_len <= map::INLINE as usize {
@@ -623,22 +753,25 @@ impl<'a> PackedMessageBuilder<'a> {
         }
 
         for (key, value) in value.iter() {
-            Self::pack_varuint(bytes, key.len() as u64);
-            bytes.extend_from_slice(key.as_bytes());
-            Self::pack_value(bytes, value);
+            let key = self
+                .state_txn
+                .get_string_key(key)
+                .expect("string key not found");
+            self.pack_varuint(bytes, key as u64);
+            self.pack_value(bytes, value);
         }
     }
 
-    fn pack_path(bytes: &mut Vec<u8>, path: &Path) {
-        Self::pack_varuint(bytes, path.segments().len() as u64);
+    fn pack_path(&mut self, bytes: &mut Vec<u8>, path: &Path) {
+        self.pack_varuint(bytes, path.segments().len() as u64);
         for segment in path.segments() {
             match segment {
                 PathSegment::Key(key) => {
-                    Self::pack_varuint(bytes, (key.len() as u64) << 2 | 0b00);
+                    self.pack_varuint(bytes, (key.len() as u64) << 2 | 0b00);
                     bytes.extend_from_slice(key.as_bytes());
                 }
                 PathSegment::Index(index) => {
-                    Self::pack_varuint(bytes, (*index as u64) << 2 | 0b01);
+                    self.pack_varuint(bytes, (*index as u64) << 2 | 0b01);
                 }
             }
         }

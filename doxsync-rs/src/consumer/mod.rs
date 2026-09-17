@@ -1,15 +1,15 @@
 use crate::message::{Action, PathSegment};
-use crate::{Document, Error, ErrorKind, Message, Result, State, Value};
+use crate::{ConsumerState, Document, Error, ErrorKind, Message, PackedMessage, Result, Value};
 
 pub struct Consumer {
-    state: State,
+    state: ConsumerState,
     document: Option<Document>,
 }
 
 impl Consumer {
     pub fn new() -> Self {
         Self {
-            state: State::new(),
+            state: ConsumerState::new(),
             document: None,
         }
     }
@@ -18,7 +18,9 @@ impl Consumer {
         self.document.as_ref()
     }
 
-    pub fn consume_diff(&mut self, diff: Message) -> Result<()> {
+    pub fn consume_diff(&mut self, diff: PackedMessage) -> Result<()> {
+        let diff = Message::from_packed(diff, &mut self.state)?;
+
         let actions = diff.actions();
 
         // If the document is not yet initialized, the first action must be a
