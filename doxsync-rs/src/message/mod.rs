@@ -241,7 +241,7 @@ mod tests {
 
         let mut map = BTreeMap::new();
         map.insert(Arc::new("answer".to_owned()), Value::int(42).unwrap());
-        map.insert(Arc::new("pi".to_owned()), Value::float(3.1415926).unwrap());
+        map.insert(Arc::new("pi".to_owned()), Value::tstr("3.1415926").unwrap());
         let value = Value::map(map).unwrap();
         let message = Message::new(vec![
             Action::Add {
@@ -267,7 +267,7 @@ mod tests {
                   |       + 00 // index of "answer"
                   |       + 0c 2a // value int(42)
                   |       + 01 // index of "pi"
-                  |       + 7b 4a d8 12 4d fb 21 09 40 // value float(3.1415926)
+                  |       + 39 33 2e 31 34 31 35 39 32 36 // value tstr("3.1415926")
                   + 02
                       + 01 // path "bar"
                           + 0c 62 61 72

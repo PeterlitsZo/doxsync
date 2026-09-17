@@ -6,6 +6,8 @@ use crate::{Error, ErrorKind, Result};
 
 const TAG_POSINT: u8 = 0x00;
 const TAG_NEGINT: u8 = 0x01;
+const TAG_BSTR: u8 = 0x02;
+const TAG_TSTR: u8 = 0x03;
 const TAG_MAP: u8 = 0x05;
 const TAG_FLOAT: u8 = 0x07;
 
@@ -32,6 +34,10 @@ pub(crate) enum ValueInner {
     NegInt { inner: u64 },
     /// A floating-point value.
     Float { inner: f64 },
+    /// A binary string value.
+    BStr { inner: Arc<Vec<u8>> },
+    /// A text string value.
+    TStr { inner: Arc<String> },
     /// A map value.
     Map { inner: BTreeMap<Arc<String>, Value> },
 }
@@ -66,6 +72,22 @@ impl Value {
         Ok(Value::inner_float(value))
     }
 
+    /// Creates a binary string value.
+    pub fn bstr<T>(value: T) -> Result<Self>
+    where
+        T: Into<Vec<u8>>,
+    {
+        Ok(Value::inner_bstr(value.into()))
+    }
+
+    /// Creates a UTF-8 text string value.
+    pub fn tstr<T>(value: T) -> Result<Self>
+    where
+        T: Into<String>,
+    {
+        Ok(Value::inner_tstr(value.into()))
+    }
+
     /// Creates a map value with UTF-8 string keys.
     ///
     /// Entries retain the deterministic key ordering provided by [`BTreeMap`].
@@ -79,6 +101,8 @@ impl Value {
         match &*self.inner {
             ValueInner::PosInt { .. } | ValueInner::NegInt { .. } => ValueKind::Int,
             ValueInner::Float { .. } => ValueKind::Float,
+            ValueInner::BStr { .. } => ValueKind::BStr,
+            ValueInner::TStr { .. } => ValueKind::TStr,
             ValueInner::Map { .. } => ValueKind::Map,
         }
     }
@@ -96,6 +120,20 @@ impl Value {
     pub fn as_float(&self) -> Option<f64> {
         match &*self.inner {
             ValueInner::Float { inner } => Some(*inner),
+            _ => None,
+        }
+    }
+
+    pub fn as_bstr(&self) -> Option<&[u8]> {
+        match &*self.inner {
+            ValueInner::BStr { inner } => Some(inner.as_slice()),
+            _ => None,
+        }
+    }
+
+    pub fn as_tstr(&self) -> Option<&str> {
+        match &*self.inner {
+            ValueInner::TStr { inner } => Some(inner.as_str()),
             _ => None,
         }
     }
@@ -139,6 +177,38 @@ impl Value {
             Err(Error::new(
                 ErrorKind::UnexpectedType,
                 "expected a float value",
+            ))
+        }
+    }
+
+    pub fn as_bstr_and_modify<F>(&self, f: F) -> Result<Self>
+    where
+        F: FnOnce(&mut Vec<u8>) -> Result<()>,
+    {
+        if let ValueInner::BStr { inner } = &*self.inner {
+            let mut inner = inner.as_ref().clone();
+            f(&mut inner)?;
+            Value::bstr(inner)
+        } else {
+            Err(Error::new(
+                ErrorKind::UnexpectedType,
+                "expected a bstr value",
+            ))
+        }
+    }
+
+    pub fn as_tstr_and_modify<F>(&self, f: F) -> Result<Self>
+    where
+        F: FnOnce(&mut String) -> Result<()>,
+    {
+        if let ValueInner::TStr { inner } = &*self.inner {
+            let mut inner = inner.as_ref().clone();
+            f(&mut inner)?;
+            Value::tstr(inner)
+        } else {
+            Err(Error::new(
+                ErrorKind::UnexpectedType,
+                "expected a tstr value",
             ))
         }
     }
@@ -200,6 +270,32 @@ impl Value {
         }
     }
 
+    pub(crate) fn inner_bstr(inner: Vec<u8>) -> Self {
+        let mut hash = blake3::Hasher::new();
+        hash.update(&[TAG_BSTR]);
+        hash.update(&inner);
+        let hash = hash.finalize();
+        Value {
+            hash,
+            inner: Arc::new(ValueInner::BStr {
+                inner: Arc::new(inner),
+            }),
+        }
+    }
+
+    pub(crate) fn inner_tstr(inner: String) -> Self {
+        let mut hash = blake3::Hasher::new();
+        hash.update(&[TAG_TSTR]);
+        hash.update(inner.as_bytes());
+        let hash = hash.finalize();
+        Value {
+            hash,
+            inner: Arc::new(ValueInner::TStr {
+                inner: Arc::new(inner),
+            }),
+        }
+    }
+
     pub(crate) fn inner_map(inner: BTreeMap<Arc<String>, Value>) -> Self {
         let mut hash = blake3::Hasher::new();
         hash.update(&[TAG_MAP]);
@@ -223,6 +319,8 @@ impl Debug for Value {
             ValueInner::PosInt { inner } => write!(f, "Int({})", inner),
             ValueInner::NegInt { inner } => write!(f, "Int({})", -(*inner as i128) - 1),
             ValueInner::Float { inner } => write!(f, "Float({})", inner),
+            ValueInner::BStr { inner } => write!(f, "BStr({:?})", inner),
+            ValueInner::TStr { inner } => write!(f, "TStr({:?})", inner),
             ValueInner::Map { inner } => write!(f, "Map({:?})", inner),
         }
     }
@@ -232,5 +330,7 @@ impl Debug for Value {
 pub enum ValueKind {
     Int,
     Float,
+    BStr,
+    TStr,
     Map,
 }
