@@ -8,6 +8,7 @@ const TAG_POSINT: u8 = 0b0000;
 const TAG_NEGINT: u8 = 0b0001;
 const TAG_BSTR: u8 = 0b0010;
 const TAG_TSTR: u8 = 0b0011;
+const TAG_ARRAY: u8 = 0b0100;
 const TAG_MAP: u8 = 0b0101;
 const TAG_FLOAT: u8 = 0b0111;
 
@@ -39,6 +40,14 @@ mod bstr {
 }
 
 mod tstr {
+    pub(crate) const INLINE: u8 = 11;
+    pub(crate) const BITS_8: u8 = 12;
+    pub(crate) const BITS_16: u8 = 13;
+    pub(crate) const BITS_32: u8 = 14;
+    pub(crate) const BITS_64: u8 = 15;
+}
+
+mod array {
     pub(crate) const INLINE: u8 = 11;
     pub(crate) const BITS_8: u8 = 12;
     pub(crate) const BITS_16: u8 = 13;
@@ -311,6 +320,11 @@ impl PackedMessageDecoder {
                     Self::unpack_tstr(bytes).map_err(|e| e.with_context("unpack text string"))?;
                 Ok(Value::inner_tstr(value))
             }
+            TAG_ARRAY => {
+                let value =
+                    Self::unpack_array(bytes, state).map_err(|e| e.with_context("unpack array"))?;
+                Ok(Value::inner_array(value))
+            }
             TAG_FLOAT => {
                 let value =
                     Self::unpack_float(bytes).map_err(|e| e.with_context("unpack float"))?;
@@ -579,6 +593,72 @@ impl PackedMessageDecoder {
         Ok(value)
     }
 
+    fn unpack_array(bytes: &mut &[u8], state: &ConsumerState) -> Result<Vec<Value>> {
+        fn unexpected_end_of_value() -> Error {
+            Error::new(ErrorKind::InvalidData, "unexpected end of value")
+        }
+
+        let first_byte = bytes.get(0).ok_or_else(|| {
+            unexpected_end_of_value().with_metadata("cause", "first byte not found")
+        })?;
+        let first_byte_payload = *first_byte & PAYLOAD_MASK;
+
+        let value_len =
+            if first_byte_payload <= array::INLINE {
+                *bytes = bytes.get(1..).ok_or_else(|| {
+                    unexpected_end_of_value().with_metadata("first_byte", first_byte)
+                })?;
+                first_byte_payload as u64
+            } else if first_byte_payload == array::BITS_8 {
+                let bytes_to_parse = bytes.get(1..2).ok_or_else(|| {
+                    unexpected_end_of_value().with_metadata("first_byte", first_byte)
+                })?;
+                let value = u8::from_le_bytes(bytes_to_parse.try_into().map_err(|_| {
+                    unexpected_end_of_value().with_metadata("first_byte", first_byte)
+                })?);
+                *bytes = bytes.get(2..).ok_or_else(unexpected_end_of_value)?;
+                value as u64
+            } else if first_byte_payload == array::BITS_16 {
+                let bytes_to_parse = bytes.get(1..3).ok_or_else(|| {
+                    unexpected_end_of_value().with_metadata("first_byte", first_byte)
+                })?;
+                let value = u16::from_le_bytes(bytes_to_parse.try_into().map_err(|_| {
+                    unexpected_end_of_value().with_metadata("first_byte", first_byte)
+                })?);
+                *bytes = bytes.get(3..).ok_or_else(unexpected_end_of_value)?;
+                value as u64
+            } else if first_byte_payload == array::BITS_32 {
+                let bytes_to_parse = bytes.get(1..5).ok_or_else(|| {
+                    unexpected_end_of_value().with_metadata("first_byte", first_byte)
+                })?;
+                let value = u32::from_le_bytes(bytes_to_parse.try_into().map_err(|_| {
+                    unexpected_end_of_value().with_metadata("first_byte", first_byte)
+                })?);
+                *bytes = bytes.get(5..).ok_or_else(unexpected_end_of_value)?;
+                value as u64
+            } else {
+                let bytes_to_parse = bytes.get(1..9).ok_or_else(|| {
+                    unexpected_end_of_value().with_metadata("first_byte", first_byte)
+                })?;
+                let value = u64::from_le_bytes(bytes_to_parse.try_into().map_err(|_| {
+                    unexpected_end_of_value().with_metadata("first_byte", first_byte)
+                })?);
+                *bytes = bytes.get(9..).ok_or_else(unexpected_end_of_value)?;
+                value
+            };
+
+        let mut value = Vec::new();
+        for index in 0..value_len {
+            let item_value = Self::unpack_value(bytes, state).map_err(|e| {
+                e.with_context("unpack array value")
+                    .with_metadata("index", index)
+            })?;
+            value.push(item_value);
+        }
+
+        Ok(value)
+    }
+
     fn unpack_map(
         bytes: &mut &[u8],
         state: &ConsumerState,
@@ -780,6 +860,12 @@ impl<'a, 's> PackedMessageBuilderInternal<'a, 's> {
         value: &Value,
     ) {
         match value.kind() {
+            ValueKind::Array => {
+                let array = value.as_array().expect("value MUST be array");
+                for value in array {
+                    self.extend_string_pool_patch(string_pool_patch, value);
+                }
+            }
             ValueKind::Map => {
                 let map = value.as_map().expect("value MUST be map");
                 for (map_key, value) in map {
@@ -828,6 +914,7 @@ impl<'a, 's> PackedMessageBuilderInternal<'a, 's> {
             ValueInner::Float { inner } => self.pack_float(bytes, *inner),
             ValueInner::BStr { inner } => self.pack_bstr(bytes, inner),
             ValueInner::TStr { inner } => self.pack_tstr(bytes, inner),
+            ValueInner::Array { inner } => self.pack_array(bytes, inner),
             ValueInner::Map { inner } => self.pack_map(bytes, inner),
         }
     }
@@ -936,6 +1023,30 @@ impl<'a, 's> PackedMessageBuilderInternal<'a, 's> {
     fn pack_float(&mut self, bytes: &mut Vec<u8>, value: f64) {
         bytes.push((TAG_FLOAT << TAG_WIDTH) | float::BITS_64);
         bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn pack_array(&mut self, bytes: &mut Vec<u8>, value: &[Value]) {
+        let value_len = value.len();
+
+        if value_len <= array::INLINE as usize {
+            bytes.push((TAG_ARRAY << TAG_WIDTH) | (value_len as u8));
+        } else if value_len < (1 << 8) {
+            bytes.push((TAG_ARRAY << TAG_WIDTH) | array::BITS_8);
+            bytes.extend_from_slice(&(value_len as u8).to_le_bytes());
+        } else if value_len < (1 << 16) {
+            bytes.push((TAG_ARRAY << TAG_WIDTH) | array::BITS_16);
+            bytes.extend_from_slice(&(value_len as u16).to_le_bytes());
+        } else if value_len < (1 << 32) {
+            bytes.push((TAG_ARRAY << TAG_WIDTH) | array::BITS_32);
+            bytes.extend_from_slice(&(value_len as u32).to_le_bytes());
+        } else {
+            bytes.push((TAG_ARRAY << TAG_WIDTH) | array::BITS_64);
+            bytes.extend_from_slice(&(value_len as u64).to_le_bytes());
+        }
+
+        for value in value {
+            self.pack_value(bytes, value);
+        }
     }
 
     fn pack_map(&mut self, bytes: &mut Vec<u8>, value: &BTreeMap<Arc<String>, Value>) {

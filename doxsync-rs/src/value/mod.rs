@@ -8,6 +8,7 @@ const TAG_POSINT: u8 = 0x00;
 const TAG_NEGINT: u8 = 0x01;
 const TAG_BSTR: u8 = 0x02;
 const TAG_TSTR: u8 = 0x03;
+const TAG_ARRAY: u8 = 0x04;
 const TAG_MAP: u8 = 0x05;
 const TAG_FLOAT: u8 = 0x07;
 
@@ -38,6 +39,8 @@ pub(crate) enum ValueInner {
     BStr { inner: Arc<Vec<u8>> },
     /// A text string value.
     TStr { inner: Arc<String> },
+    /// An array value.
+    Array { inner: Vec<Value> },
     /// A map value.
     Map { inner: BTreeMap<Arc<String>, Value> },
 }
@@ -88,6 +91,11 @@ impl Value {
         Ok(Value::inner_tstr(value.into()))
     }
 
+    /// Creates an array value.
+    pub fn array(value: Vec<Value>) -> Result<Self> {
+        Ok(Value::inner_array(value))
+    }
+
     /// Creates a map value with UTF-8 string keys.
     ///
     /// Entries retain the deterministic key ordering provided by [`BTreeMap`].
@@ -103,6 +111,7 @@ impl Value {
             ValueInner::Float { .. } => ValueKind::Float,
             ValueInner::BStr { .. } => ValueKind::BStr,
             ValueInner::TStr { .. } => ValueKind::TStr,
+            ValueInner::Array { .. } => ValueKind::Array,
             ValueInner::Map { .. } => ValueKind::Map,
         }
     }
@@ -134,6 +143,13 @@ impl Value {
     pub fn as_tstr(&self) -> Option<&str> {
         match &*self.inner {
             ValueInner::TStr { inner } => Some(inner.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn as_array(&self) -> Option<&[Value]> {
+        match &*self.inner {
+            ValueInner::Array { inner } => Some(inner.as_slice()),
             _ => None,
         }
     }
@@ -209,6 +225,22 @@ impl Value {
             Err(Error::new(
                 ErrorKind::UnexpectedType,
                 "expected a tstr value",
+            ))
+        }
+    }
+
+    pub fn as_array_and_modify<F>(&self, f: F) -> Result<Self>
+    where
+        F: FnOnce(&mut Vec<Value>) -> Result<()>,
+    {
+        if let ValueInner::Array { inner } = &*self.inner {
+            let mut inner = inner.clone();
+            f(&mut inner)?;
+            Value::array(inner)
+        } else {
+            Err(Error::new(
+                ErrorKind::UnexpectedType,
+                "expected an array value",
             ))
         }
     }
@@ -296,6 +328,19 @@ impl Value {
         }
     }
 
+    pub(crate) fn inner_array(inner: Vec<Value>) -> Self {
+        let mut hash = blake3::Hasher::new();
+        hash.update(&[TAG_ARRAY]);
+        for value in &inner {
+            hash.update(value.hash.as_bytes());
+        }
+        let hash = hash.finalize();
+        Value {
+            hash,
+            inner: Arc::new(ValueInner::Array { inner }),
+        }
+    }
+
     pub(crate) fn inner_map(inner: BTreeMap<Arc<String>, Value>) -> Self {
         let mut hash = blake3::Hasher::new();
         hash.update(&[TAG_MAP]);
@@ -321,6 +366,7 @@ impl Debug for Value {
             ValueInner::Float { inner } => write!(f, "Float({})", inner),
             ValueInner::BStr { inner } => write!(f, "BStr({:?})", inner),
             ValueInner::TStr { inner } => write!(f, "TStr({:?})", inner),
+            ValueInner::Array { inner } => write!(f, "Array({:?})", inner),
             ValueInner::Map { inner } => write!(f, "Map({:?})", inner),
         }
     }
@@ -332,5 +378,6 @@ pub enum ValueKind {
     Float,
     BStr,
     TStr,
+    Array,
     Map,
 }
