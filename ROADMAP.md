@@ -10,3 +10,5 @@
 - [ ] Limit string lengths in the string pool.
 - [ ] Add a FIFO/LRU admission queue for caching TStr values.
 - [ ] Support caching BStr values.
+- [ ] Represent each path using a parent reference and the current segment to
+      reduce memory usage.
