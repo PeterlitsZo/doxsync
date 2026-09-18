@@ -4,6 +4,8 @@ use blake3::Hash;
 
 use crate::{Error, ErrorKind, Result};
 
+mod macros;
+
 const TAG_POSINT: u8 = 0x00;
 const TAG_NEGINT: u8 = 0x10;
 const TAG_BSTR: u8 = 0x20;

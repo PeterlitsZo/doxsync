@@ -109,21 +109,9 @@ struct DiffPlan {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::Arc};
-
-    use crate::ProducerState;
+    use crate::{ProducerState, value};
 
     use super::*;
-
-    fn map<const N: usize>(entries: [(&str, Value); N]) -> Value {
-        Value::map(
-            entries
-                .into_iter()
-                .map(|(key, value)| (Arc::new(key.to_owned()), value))
-                .collect::<BTreeMap<_, _>>(),
-        )
-        .unwrap()
-    }
 
     #[track_caller]
     fn assert_diff_plan(old: &Document, new: &Document, expected: Message) {
@@ -135,60 +123,70 @@ mod tests {
     }
 
     #[test]
-    #[rustfmt::skip]
     fn test_choose_best_diff_plan() {
         // Case 1:
         // =====================================================================
-        let old = Document::new(Value::int(1).unwrap());
-        let new = Document::new(Value::int(2).unwrap());
+        let old = Document::new(value!(1).unwrap());
+        let new = Document::new(value!(2).unwrap());
         assert_diff_plan(
             &old,
             &new,
             Message::new(vec![Action::Snapshot {
-                value: Value::int(2).unwrap(),
+                value: value!(2).unwrap(),
             }]),
         );
 
         // Case 2: a sparse set of changes in a complex map is cheaper as
         // individual add and delete actions.
         // =====================================================================
-        let stable = Value::tstr("stable-payload".repeat(8)).unwrap();
-        let old_config = map([
-            ("region", Value::tstr("us-east-1").unwrap()),
-            ("replicas", Value::int(2).unwrap()),
-        ]);
-        let new_config = map([
-            ("flags", Value::array(vec![Value::bool(true).unwrap(), Value::null().unwrap()]).unwrap()),
-            ("region", Value::tstr("eu-west-1").unwrap()),
-            ("replicas", Value::int(3).unwrap()),
-        ]);
-        let features = map([
-            ("audit", Value::bool(true).unwrap()),
-            ("search", Value::bool(false).unwrap()),
-        ]);
-        let old = Document::new(map([
-            ("config", old_config),
-            ("obsolete", Value::array(vec![Value::int(1).unwrap(), Value::int(2).unwrap()]).unwrap()),
-            ("stable", stable.clone()),
-            ("version", Value::int(1).unwrap()),
-        ]));
-        let new = Document::new(map([
-            ("config", new_config.clone()),
-            ("features", features.clone()),
-            ("stable", stable),
-            ("version", Value::int(1).unwrap()),
-        ]));
+        let old = Document::new(
+            value!({
+                "config": {
+                    "region": "us-east-1",
+                    "replicas": 2,
+                },
+                "obsolete": [1, 2],
+                "stable": "stable-payload".repeat(8),
+                "version": 1,
+            })
+            .unwrap(),
+        );
+        let new = Document::new(
+            value!({
+                "config": {
+                    "flags": [true, null],
+                    "region": "eu-west-1",
+                    "replicas": 3,
+                },
+                "features": {
+                    "audit": true,
+                    "search": false,
+                },
+                "stable": "stable-payload".repeat(8),
+                "version": 1,
+            })
+            .unwrap(),
+        );
         assert_diff_plan(
             &old,
             &new,
             Message::new(vec![
                 Action::Add {
                     path: Path::new(vec![PathSegment::key("config")]),
-                    value: new_config,
+                    value: value!({
+                        "flags": [true, null],
+                        "region": "eu-west-1",
+                        "replicas": 3,
+                    })
+                    .unwrap(),
                 },
                 Action::Add {
                     path: Path::new(vec![PathSegment::key("features")]),
-                    value: features,
+                    value: value!({
+                        "audit": true,
+                        "search": false,
+                    })
+                    .unwrap(),
                 },
                 Action::Delete {
                     path: Path::new(vec![PathSegment::key("obsolete")]),
@@ -198,57 +196,77 @@ mod tests {
 
         // Case 3: replacing most short-key entries is cheaper as one snapshot.
         // =====================================================================
-        let old = Document::new(map([
-            ("a", Value::bool(false).unwrap()),
-            ("b", Value::int(1).unwrap()),
-            ("c", Value::tstr("old").unwrap()),
-            ("d", Value::null().unwrap()),
-        ]));
-        let new_value = map([
-            ("a", Value::bool(true).unwrap()),
-            ("b", Value::float(2.0).unwrap()),
-            ("e", Value::bool(false).unwrap()),
-        ]);
-        let new = Document::new(new_value.clone());
+        let old = Document::new(
+            value!({
+                "a": false,
+                "b": 1,
+                "c": "old",
+                "d": null,
+            })
+            .unwrap(),
+        );
+        let new = Document::new(
+            value!({
+                "a": true,
+                "b": 2.0,
+                "e": false,
+            })
+            .unwrap(),
+        );
         assert_diff_plan(
             &old,
             &new,
-            Message::new(vec![Action::Snapshot { value: new_value }]),
+            Message::new(vec![Action::Snapshot {
+                value: value!({
+                    "a": true,
+                    "b": 2.0,
+                    "e": false,
+                })
+                .unwrap(),
+            }]),
         );
 
         // Case 4: when snapshot and map diff costs tie, snapshot wins because
         // it is considered first.
         // =====================================================================
-        let old = Document::new(map([("id", Value::bool(false).unwrap())]));
-        let new_value = map([("id", Value::bool(true).unwrap())]);
-        let new = Document::new(new_value.clone());
+        let old = Document::new(value!({ "id": false }).unwrap());
+        let new = Document::new(value!({ "id": true }).unwrap());
         assert_diff_plan(
             &old,
             &new,
-            Message::new(vec![Action::Snapshot { value: new_value }]),
+            Message::new(vec![Action::Snapshot {
+                value: value!({ "id": true }).unwrap(),
+            }]),
         );
 
         // Case 5: an unchanged complex map produces no actions.
         // =====================================================================
-        let value = map([
-            (
-                "items",
-                Value::array(vec![
-                    map([("id", Value::int(1).unwrap())]),
-                    map([("id", Value::int(2).unwrap())]),
-                ])
-                .unwrap(),
-            ),
-            (
-                "metadata",
-                map([
-                    ("enabled", Value::bool(true).unwrap()),
-                    ("owner", Value::tstr("doxsync").unwrap()),
-                ]),
-            ),
-        ]);
-        let old = Document::new(value.clone());
-        let new = Document::new(value);
+        let old = Document::new(
+            value!({
+                "items": [
+                    { "id": 1 },
+                    { "id": 2 },
+                ],
+                "metadata": {
+                    "enabled": true,
+                    "owner": "doxsync",
+                },
+            })
+            .unwrap(),
+        );
+        let new = Document::new(
+            value!({
+                "items": [
+                    { "id": 1 },
+                    { "id": 2 },
+                ],
+                "metadata": {
+                    "enabled": true,
+                    "owner": "doxsync",
+                },
+            })
+            .unwrap(),
+        );
         assert_diff_plan(&old, &new, Message::new(vec![]));
     }
 }

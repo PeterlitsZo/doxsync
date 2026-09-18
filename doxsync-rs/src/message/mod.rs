@@ -40,9 +40,7 @@ impl Message {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::Arc};
-
-    use crate::{ProducerState, Value};
+    use crate::{ProducerState, value};
 
     use super::*;
 
@@ -94,7 +92,7 @@ mod tests {
         // =====================================================================
 
         let message = Message::new(vec![Action::Snapshot {
-            value: Value::int(42).unwrap(),
+            value: value!(42).unwrap(),
         }]);
 
         let packed = message.packed(&mut producer_state_txn);
@@ -104,7 +102,7 @@ mod tests {
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
-                value: Value::int(42).unwrap()
+                value: value!(42).unwrap()
             },]
         );
 
@@ -112,7 +110,7 @@ mod tests {
         // =====================================================================
 
         let message = Message::new(vec![Action::Snapshot {
-            value: Value::int(1).unwrap(),
+            value: value!(1).unwrap(),
         }]);
 
         let packed = message.packed(&mut producer_state_txn);
@@ -122,7 +120,7 @@ mod tests {
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
-                value: Value::int(1).unwrap()
+                value: value!(1).unwrap()
             },]
         );
 
@@ -130,7 +128,7 @@ mod tests {
         // =====================================================================
 
         let message = Message::new(vec![Action::Snapshot {
-            value: Value::int(0x1FFFFFF).unwrap(),
+            value: value!(0x1FFFFFF).unwrap(),
         }]);
 
         let packed = message.packed(&mut producer_state_txn);
@@ -140,7 +138,7 @@ mod tests {
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
-                value: Value::int(0x1FFFFFF).unwrap()
+                value: value!(0x1FFFFFF).unwrap()
             },]
         );
 
@@ -148,7 +146,7 @@ mod tests {
         // =====================================================================
 
         let message = Message::new(vec![Action::Snapshot {
-            value: Value::int(-42).unwrap(),
+            value: value!(-42).unwrap(),
         }]);
 
         let packed = message.packed(&mut producer_state_txn);
@@ -158,7 +156,7 @@ mod tests {
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
-                value: Value::int(-42).unwrap()
+                value: value!(-42).unwrap()
             },]
         );
 
@@ -166,7 +164,7 @@ mod tests {
         // =====================================================================
 
         let message = Message::new(vec![Action::Snapshot {
-            value: Value::int(-0x1FFFFFF).unwrap(),
+            value: value!(-0x1FFFFFF).unwrap(),
         }]);
 
         let packed = message.packed(&mut producer_state_txn);
@@ -176,7 +174,7 @@ mod tests {
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
-                value: Value::int(-0x1FFFFFF).unwrap()
+                value: value!(-0x1FFFFFF).unwrap()
             },]
         );
 
@@ -184,7 +182,7 @@ mod tests {
         // =====================================================================
 
         let message = Message::new(vec![Action::Snapshot {
-            value: Value::float(3.1415926).unwrap(),
+            value: value!(3.1415926).unwrap(),
         }]);
 
         let packed = message.packed(&mut producer_state_txn);
@@ -197,17 +195,18 @@ mod tests {
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
-                value: Value::float(3.1415926).unwrap()
+                value: value!(3.1415926).unwrap()
             },]
         );
 
         // Case 7:
         // =====================================================================
 
-        let mut map = BTreeMap::new();
-        map.insert(Arc::new("answer".to_owned()), Value::int(42).unwrap());
-        map.insert(Arc::new("pi".to_owned()), Value::float(3.1415926).unwrap());
-        let value = Value::map(map).unwrap();
+        let value = value!({
+            "answer": 42,
+            "pi": 3.1415926,
+        })
+        .unwrap();
         let message = Message::new(vec![Action::Snapshot {
             value: value.clone(),
         }]);
@@ -239,10 +238,11 @@ mod tests {
         // Case 8:
         // =====================================================================
 
-        let mut map = BTreeMap::new();
-        map.insert(Arc::new("answer".to_owned()), Value::int(42).unwrap());
-        map.insert(Arc::new("pi".to_owned()), Value::tstr("3.1415926").unwrap());
-        let value = Value::map(map).unwrap();
+        let value = value!({
+            "answer": 42,
+            "pi": "3.1415926",
+        })
+        .unwrap();
         let message = Message::new(vec![
             Action::Add {
                 path: Path::new(vec![PathSegment::key("foo"), PathSegment::index(42)]),
@@ -280,12 +280,7 @@ mod tests {
         // Case 9:
         // =====================================================================
 
-        let value = Value::array(vec![
-            Value::null().unwrap(),
-            Value::bool(false).unwrap(),
-            Value::bool(true).unwrap(),
-        ])
-        .unwrap();
+        let value = value!([null, false, true]).unwrap();
         let message = Message::new(vec![Action::Snapshot {
             value: value.clone(),
         }]);

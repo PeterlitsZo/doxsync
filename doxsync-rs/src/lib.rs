@@ -6,6 +6,9 @@ mod producer;
 mod state;
 mod value;
 
+#[doc(hidden)]
+pub mod __private;
+
 pub use consumer::Consumer;
 pub use document::Document;
 pub use error::{Error, ErrorKind, Result};
