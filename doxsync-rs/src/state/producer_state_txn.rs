@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use super::{
     ProducerState,
     bitmap::Bitmap,
-    lru_txn::{LruPutResult, LruTxn},
+    lru_txn::{LruPutResult, LruSavepoint, LruTxn},
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -11,6 +11,13 @@ pub(crate) enum InsertStringResult {
     Existing { key: u32 },
     Inserted { key: u32 },
     Replaced { key: u32 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[must_use]
+pub(crate) struct ProducerStateSavepoint {
+    rollback_log_len: usize,
+    string_pool_lru: LruSavepoint,
 }
 
 pub(crate) struct ProducerStateTxn {
@@ -84,6 +91,31 @@ impl ProducerStateTxn {
 
     pub(crate) fn get_string_key(&self, value: &Arc<String>) -> Option<u32> {
         self.string_pool_reverse.get(value).copied()
+    }
+
+    pub(crate) fn savepoint(&self) -> ProducerStateSavepoint {
+        ProducerStateSavepoint {
+            rollback_log_len: self.rollback_log.len(),
+            string_pool_lru: self.string_pool_lru.savepoint(),
+        }
+    }
+
+    pub(crate) fn rollback_to(&mut self, savepoint: ProducerStateSavepoint) {
+        assert!(
+            savepoint.rollback_log_len <= self.rollback_log.len(),
+            "savepoint must not be ahead of the producer state transaction"
+        );
+        self.string_pool_lru
+            .assert_valid_savepoint(savepoint.string_pool_lru);
+
+        while self.rollback_log.len() > savepoint.rollback_log_len {
+            let entry = self
+                .rollback_log
+                .pop()
+                .expect("rollback log must contain an entry after the savepoint");
+            entry.undo(self);
+        }
+        self.string_pool_lru.rollback_to(savepoint.string_pool_lru);
     }
 
     pub(crate) fn insert_string(&mut self, value: Arc<String>) -> InsertStringResult {

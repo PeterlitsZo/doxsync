@@ -49,12 +49,24 @@ impl Debug for Path {
 }
 
 impl Path {
+    pub(crate) fn empty() -> Self {
+        Self::new(vec![])
+    }
+
     pub(crate) fn new(inner: Vec<PathSegment>) -> Self {
         Self { inner }
     }
 
     pub(crate) fn segments(&self) -> &[PathSegment] {
         &self.inner
+    }
+
+    pub(crate) fn push_segment(&mut self, segment: PathSegment) {
+        self.inner.push(segment);
+    }
+
+    pub(crate) fn pop_segment(&mut self) -> Option<PathSegment> {
+        self.inner.pop()
     }
 }
 

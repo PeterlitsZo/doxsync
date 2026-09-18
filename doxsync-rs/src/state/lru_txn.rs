@@ -6,6 +6,12 @@ pub(super) enum LruPutResult<K> {
     Evicted { key: K },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[must_use]
+pub(super) struct LruSavepoint {
+    rollback_log_len: usize,
+}
+
 pub(super) struct LruTxn<K>
 where
     K: Clone + Default + Ord,
@@ -60,6 +66,24 @@ where
         result
     }
 
+    pub(super) fn savepoint(&self) -> LruSavepoint {
+        LruSavepoint {
+            rollback_log_len: self.rollback_log.len(),
+        }
+    }
+
+    pub(super) fn rollback_to(&mut self, savepoint: LruSavepoint) {
+        self.assert_valid_savepoint(savepoint);
+
+        while self.rollback_log.len() > savepoint.rollback_log_len {
+            let entry = self
+                .rollback_log
+                .pop()
+                .expect("rollback log must contain an entry after the savepoint");
+            entry.undo(self);
+        }
+    }
+
     pub(super) fn commit(mut self) -> Lru<K> {
         self.rollback_log.clear();
         self.lru
@@ -75,6 +99,13 @@ impl<K> LruTxn<K>
 where
     K: Clone + Default + Ord,
 {
+    pub(super) fn assert_valid_savepoint(&self, savepoint: LruSavepoint) {
+        assert!(
+            savepoint.rollback_log_len <= self.rollback_log.len(),
+            "savepoint must not be ahead of the LRU transaction"
+        );
+    }
+
     fn rollback_all(&mut self) {
         while let Some(entry) = self.rollback_log.pop() {
             entry.undo(self);

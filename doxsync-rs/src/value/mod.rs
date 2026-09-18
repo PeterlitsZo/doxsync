@@ -20,7 +20,11 @@ const TAG_NULL: u8 = TAG_FLOAT | 0x06;
 /// Fast to compare, and cheap to clone.
 #[derive(Clone)]
 pub struct Value {
+    /// The hash of the value.
     hash: Hash,
+    /// How expensive it is.
+    cost: usize,
+    /// The inner value.
     inner: Arc<ValueInner>,
 }
 
@@ -311,6 +315,14 @@ impl Value {
 }
 
 impl Value {
+    pub(crate) fn hash(&self) -> Hash {
+        self.hash
+    }
+
+    pub(crate) fn cost(&self) -> usize {
+        self.cost
+    }
+
     pub(crate) fn inner(&self) -> &ValueInner {
         &self.inner
     }
@@ -322,6 +334,7 @@ impl Value {
         let hash = hash.finalize();
         Value {
             hash,
+            cost: 8,
             inner: Arc::new(ValueInner::PosInt { inner }),
         }
     }
@@ -333,6 +346,7 @@ impl Value {
         let hash = hash.finalize();
         Value {
             hash,
+            cost: 8,
             inner: Arc::new(ValueInner::NegInt { inner }),
         }
     }
@@ -341,6 +355,7 @@ impl Value {
         let hash = blake3::hash(&[TAG_NULL]);
         Value {
             hash,
+            cost: 1,
             inner: Arc::new(ValueInner::Null),
         }
     }
@@ -349,6 +364,7 @@ impl Value {
         let hash = blake3::hash(&[if inner { TAG_TRUE } else { TAG_FALSE }]);
         Value {
             hash,
+            cost: 1,
             inner: Arc::new(ValueInner::Bool { inner }),
         }
     }
@@ -360,6 +376,7 @@ impl Value {
         let hash = hash.finalize();
         Value {
             hash,
+            cost: 1,
             inner: Arc::new(ValueInner::Float { inner }),
         }
     }
@@ -371,6 +388,7 @@ impl Value {
         let hash = hash.finalize();
         Value {
             hash,
+            cost: inner.len(),
             inner: Arc::new(ValueInner::BStr {
                 inner: Arc::new(inner),
             }),
@@ -384,6 +402,7 @@ impl Value {
         let hash = hash.finalize();
         Value {
             hash,
+            cost: inner.len(),
             inner: Arc::new(ValueInner::TStr {
                 inner: Arc::new(inner),
             }),
@@ -392,29 +411,40 @@ impl Value {
 
     pub(crate) fn inner_array(inner: Vec<Value>) -> Self {
         let mut hash = blake3::Hasher::new();
+        let mut cost = 0;
+
         hash.update(&[TAG_ARRAY]);
         for value in &inner {
             hash.update(value.hash.as_bytes());
+            cost += value.cost;
         }
         let hash = hash.finalize();
+
         Value {
             hash,
+            cost,
             inner: Arc::new(ValueInner::Array { inner }),
         }
     }
 
     pub(crate) fn inner_map(inner: BTreeMap<Arc<String>, Value>) -> Self {
         let mut hash = blake3::Hasher::new();
+        let mut cost = 0;
+
         hash.update(&[TAG_MAP]);
         for (key, value) in &inner {
             let key_bytes = key.as_bytes();
             hash.update(&(key_bytes.len() as u64).to_le_bytes());
             hash.update(key_bytes);
             hash.update(value.hash.as_bytes());
+            cost += key.len();
+            cost += value.cost;
         }
         let hash = hash.finalize();
+
         Value {
             hash,
+            cost,
             inner: Arc::new(ValueInner::Map { inner }),
         }
     }

@@ -1,5 +1,8 @@
-use crate::message::{Action, Path, PathSegment};
-use crate::{Document, Message, PackedMessage, ProducerState, Result, ValueKind};
+use crate::message::Action;
+use crate::{Document, Message, PackedMessage, ProducerState, Result};
+
+mod differ;
+use differ::Differ;
 
 pub struct Producer {
     state: Option<ProducerState>,
@@ -25,9 +28,12 @@ impl Producer {
         std::mem::swap(&mut state, &mut self.state);
         let state = state.expect("state is unexpected None");
         let mut state_txn = state.txn();
+
         let d = diff.packed(&mut state_txn);
+
         let state = state_txn.commit();
         self.state = Some(state);
+
         d
     }
 
@@ -53,42 +59,16 @@ impl Producer {
                 Ok(Some(message))
             }
             Some(ref last) => {
-                let last_value = last.value();
-                let curr_value = self.current_document.value();
-                if last_value.kind() == curr_value.kind() && curr_value.kind() == ValueKind::Map {
-                    let last_map = last_value.as_map().expect("must be map");
-                    let curr_map = curr_value.as_map().expect("must be map");
-                    let mut actions = vec![];
-                    for (key, value) in curr_map.iter() {
-                        if let Some(last_value) = last_map.get(key) {
-                            if last_value != value {
-                                actions.push(Action::Add {
-                                    path: Path::new(vec![PathSegment::key_arc(key.clone())]),
-                                    value: value.clone(),
-                                });
-                            }
-                        } else {
-                            actions.push(Action::Add {
-                                path: Path::new(vec![PathSegment::key_arc(key.clone())]),
-                                value: value.clone(),
-                            });
-                        }
-                    }
-                    for (key, _) in last_map.iter() {
-                        if !curr_map.contains_key(key) {
-                            actions.push(Action::Delete {
-                                path: Path::new(vec![PathSegment::key_arc(key.clone())]),
-                            });
-                        }
-                    }
-                    let message = Message::new(actions);
-                    self.last_emited_document = Some(self.current_document.clone());
-                    return Ok(Some(message));
-                }
+                let mut state = None;
+                std::mem::swap(&mut state, &mut self.state);
+                let state = state.expect("state is unexpected None");
+                let mut state_txn = state.txn();
 
-                let message = Message::new(vec![Action::Snapshot {
-                    value: self.current_document.value(),
-                }]);
+                let message = Differ::new(&mut state_txn).diff(last, &self.current_document);
+
+                let state = state_txn.rollback();
+                self.state = Some(state);
+
                 self.last_emited_document = Some(self.current_document.clone());
                 Ok(Some(message))
             }
