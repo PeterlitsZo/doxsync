@@ -1,5 +1,5 @@
 use crate::{
-    Document, Message, Value, ValueKind,
+    Document, ErrorKind, Message, Result, Value, ValueKind,
     message::{Action, Path, PathSegment},
     state::ProducerStateTxn,
 };
@@ -16,15 +16,14 @@ impl<'s> Differ<'s> {
         Self { state_txn }
     }
 
-    pub(super) fn diff(&self, old: &Document, new: &Document) -> Message {
+    pub(super) fn diff(&self, old: &Document, new: &Document) -> Result<Message> {
         let internal = DifferInternal::new(self.state_txn, old, new);
-        let diff_plan = internal.choose_best_diff_plan();
-        Message::new(diff_plan.actions)
+        let diff_plan = internal.choose_best_diff_plan()?;
+        Ok(diff_plan.message)
     }
 }
 
 struct DifferInternal<'s> {
-    #[allow(dead_code)]
     state_txn: &'s ProducerStateTxn,
     old: &'s Document,
     new: &'s Document,
@@ -39,29 +38,36 @@ impl<'s> DifferInternal<'s> {
         }
     }
 
-    fn choose_best_diff_plan(&self) -> DiffPlan {
+    fn choose_best_diff_plan(&self) -> Result<DiffPlan> {
         let old_value = self.old.value();
         let new_value = self.new.value();
 
         let replace_diff_plan = self.replace_diff_plan();
         let mut plans = vec![replace_diff_plan];
 
-        match (old_value.kind(), new_value.kind()) {
-            (ValueKind::Map, ValueKind::Map) => {
-                let map_diff_plan = self.map_diff_plan(&old_value, &new_value);
-                plans.push(map_diff_plan);
-            }
-            _ => {}
+        if old_value.kind() == ValueKind::Map && new_value.kind() == ValueKind::Map {
+            plans.push(self.map_diff_plan(&old_value, &new_value));
         }
 
-        plans.into_iter().min_by_key(|p| p.cost).unwrap()
+        // Stable ordering keeps snapshots first when estimated costs tie.
+        // Validate in cost order without encoding or changing the pools.
+        plans.sort_by_key(|plan| plan.cost);
+        let mut rejected = None;
+        for plan in plans {
+            match plan.message.validate(self.state_txn) {
+                Ok(()) => return Ok(plan),
+                Err(error) if error.kind() == ErrorKind::InvalidData => rejected = Some(error),
+                Err(error) => return Err(error),
+            }
+        }
+        Err(rejected.expect("at least one candidate"))
     }
 
     fn replace_diff_plan(&self) -> DiffPlan {
         let new_value = self.new.value();
         let cost = new_value.cost();
         DiffPlan {
-            actions: vec![Action::Snapshot { value: new_value }],
+            message: Message::new(vec![Action::Snapshot { value: new_value }]),
             cost,
         }
     }
@@ -73,15 +79,7 @@ impl<'s> DifferInternal<'s> {
         let mut actions = vec![];
         let mut cost = 0;
         for (key, value) in new_map.iter() {
-            if let Some(old_value) = old_map.get(key) {
-                if old_value != value {
-                    cost += COST_ADD + value.cost();
-                    actions.push(Action::Add {
-                        path: Path::new(vec![PathSegment::key_arc(key.clone())]),
-                        value: value.clone(),
-                    });
-                }
-            } else {
+            if old_map.get(key) != Some(value) {
                 cost += COST_ADD + value.cost();
                 actions.push(Action::Add {
                     path: Path::new(vec![PathSegment::key_arc(key.clone())]),
@@ -89,7 +87,7 @@ impl<'s> DifferInternal<'s> {
                 });
             }
         }
-        for (key, _) in old_map.iter() {
+        for key in old_map.keys() {
             if !new_map.contains_key(key) {
                 cost += COST_DELETE;
                 actions.push(Action::Delete {
@@ -98,12 +96,15 @@ impl<'s> DifferInternal<'s> {
             }
         }
 
-        DiffPlan { actions, cost }
+        DiffPlan {
+            message: Message::new(actions),
+            cost,
+        }
     }
 }
 
 struct DiffPlan {
-    actions: Vec<Action>,
+    message: Message,
     cost: usize,
 }
 
@@ -118,7 +119,7 @@ mod tests {
         let state = ProducerState::new();
         let state_txn = state.txn();
         let differ = Differ::new(&state_txn);
-        let diff = differ.diff(old, new);
+        let diff = differ.diff(old, new).unwrap();
         assert_eq!(diff, expected);
     }
 

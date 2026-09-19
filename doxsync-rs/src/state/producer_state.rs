@@ -1,10 +1,15 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use crate::message::Path;
 use crate::state::{Bitmap, Lru, ProducerStateTxn};
 
 pub(crate) struct ProducerState {
+    pub(super) path_pool: BTreeMap<u32, Arc<Path>>,
+    pub(super) path_pool_bitmap: Bitmap,
+    pub(super) path_pool_reverse: BTreeMap<Arc<Path>, u32>,
+    pub(super) path_pool_lru: Lru<Arc<Path>>,
+
     pub(super) string_pool: BTreeMap<u32, Arc<String>>,
-    pub(super) string_pool_size: usize,
     pub(super) string_pool_bitmap: Bitmap,
     pub(super) string_pool_reverse: BTreeMap<Arc<String>, u32>,
     pub(super) string_pool_lru: Lru<Arc<String>>,
@@ -12,10 +17,14 @@ pub(crate) struct ProducerState {
 
 impl Default for ProducerState {
     fn default() -> Self {
-        let default_string_pool_size = 4096;
+        let default_string_pool_size = super::STRING_POOL_CAPACITY;
+        let default_path_pool_size = super::PATH_POOL_CAPACITY;
         Self {
+            path_pool: BTreeMap::new(),
+            path_pool_bitmap: Bitmap::new(default_path_pool_size),
+            path_pool_reverse: BTreeMap::new(),
+            path_pool_lru: Lru::new(default_path_pool_size),
             string_pool: BTreeMap::new(),
-            string_pool_size: default_string_pool_size,
             string_pool_bitmap: Bitmap::new(default_string_pool_size),
             string_pool_reverse: BTreeMap::new(),
             string_pool_lru: Lru::new(default_string_pool_size),

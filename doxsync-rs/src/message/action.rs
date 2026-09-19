@@ -27,7 +27,7 @@ pub(crate) enum Action {
 }
 
 /// A path in the document.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct Path {
     inner: Vec<PathSegment>,
 }
@@ -71,7 +71,7 @@ impl Path {
 }
 
 /// A segment in a path.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum PathSegment {
     Key(Arc<String>),
     Index(usize),

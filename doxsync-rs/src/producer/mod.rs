@@ -23,55 +23,58 @@ impl Producer {
         self.current_document = new_document;
     }
 
-    pub fn pack_diff(&mut self, diff: Message) -> PackedMessage {
-        let mut state = None;
-        std::mem::swap(&mut state, &mut self.state);
-        let state = state.expect("state is unexpected None");
-        let mut state_txn = state.txn();
-
-        let d = diff.packed(&mut state_txn);
-
-        let state = state_txn.commit();
-        self.state = Some(state);
-
-        d
+    /// Packs a message.
+    ///
+    /// Internal state will be updated on success
+    pub fn pack_diff(&mut self, diff: Message) -> Result<PackedMessage> {
+        let mut txn = self.state.take().expect("producer state").txn();
+        let result = diff.packed(&mut txn);
+        self.state = Some(if result.is_ok() {
+            txn.commit()
+        } else {
+            txn.rollback()
+        });
+        result
     }
 
+    /// Packs an encodable change selected by estimated cost. On failure the baseline and pools
+    /// remain unchanged, so the same update can be retried.
     pub fn produce_diff(&mut self) -> Result<Option<PackedMessage>> {
-        let diff = self.produce_diff_unpacked()?;
-        match diff {
-            Some(d) => {
-                let packed = self.pack_diff(d);
-                Ok(Some(packed))
-            }
-            None => Ok(None),
-        }
+        let Some(message) = self.next_message()? else {
+            return Ok(None);
+        };
+        let packed = self.pack_diff(message)?;
+        self.last_emited_document = Some(self.current_document.clone());
+        Ok(Some(packed))
     }
 
+    /// Produces a structured message and advances the document baseline.
+    /// Cost estimation and resource validation leave pools unchanged. Pack and deliver
+    /// each returned message before requesting another; retain a clone for retry
+    /// if packing fails. Prefer `produce_diff` for atomic baseline advancement.
     pub fn produce_diff_unpacked(&mut self) -> Result<Option<Message>> {
-        match self.last_emited_document {
-            Some(ref last) if self.current_document == *last => Ok(None),
+        let message = self.next_message()?;
+        if message.is_some() {
+            self.last_emited_document = Some(self.current_document.clone());
+        }
+        Ok(message)
+    }
+
+    fn next_message(&mut self) -> Result<Option<Message>> {
+        if self.last_emited_document.as_ref() == Some(&self.current_document) {
+            return Ok(None);
+        }
+        let txn = self.state.take().expect("producer state").txn();
+        let result = match &self.last_emited_document {
+            Some(last) => Differ::new(&txn).diff(last, &self.current_document),
             None => {
                 let message = Message::new(vec![Action::Snapshot {
                     value: self.current_document.value(),
                 }]);
-                self.last_emited_document = Some(self.current_document.clone());
-                Ok(Some(message))
+                message.validate(&txn).map(|_| message)
             }
-            Some(ref last) => {
-                let mut state = None;
-                std::mem::swap(&mut state, &mut self.state);
-                let state = state.expect("state is unexpected None");
-                let mut state_txn = state.txn();
-
-                let message = Differ::new(&mut state_txn).diff(last, &self.current_document);
-
-                let state = state_txn.rollback();
-                self.state = Some(state);
-
-                self.last_emited_document = Some(self.current_document.clone());
-                Ok(Some(message))
-            }
-        }
+        };
+        self.state = Some(txn.rollback());
+        result.map(Some)
     }
 }

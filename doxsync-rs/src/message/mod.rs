@@ -7,7 +7,7 @@ pub(crate) use action::{Action, Path, PathSegment};
 
 use crate::{
     Result,
-    state::{ConsumerState, ProducerStateTxn},
+    state::{ConsumerStateTxn, ProducerStateTxn},
 };
 
 /// A structured doxsync message.
@@ -25,22 +25,30 @@ impl Message {
         &self.actions
     }
 
-    pub(crate) fn from_packed(packed: PackedMessage, state: &mut ConsumerState) -> Result<Self> {
-        packed::PackedMessageDecoder::default().decode(packed.bytes(), state)
+    /// Leaves successful changes in the transaction; errors restore its entry savepoint.
+    pub(crate) fn from_packed(
+        packed: PackedMessage,
+        state_txn: &mut ConsumerStateTxn,
+    ) -> Result<Self> {
+        packed::PackedMessageDecoder::default().decode(packed.bytes(), state_txn)
     }
 
-    pub(crate) fn packed(&self, state_txn: &mut ProducerStateTxn) -> PackedMessage {
+    /// Checks encoding resource limits without writing bytes or changing pools.
+    pub(crate) fn validate(&self, state_txn: &ProducerStateTxn) -> Result<()> {
+        packed::validate_message(&self.actions, state_txn)
+    }
+
+    pub(crate) fn packed(&self, state_txn: &mut ProducerStateTxn) -> Result<PackedMessage> {
         packed::PackedMessageBuilder::default()
             .with_actions(&self.actions)
             .with_state_txn(state_txn)
             .build()
-            .expect("packing message failed")
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{ProducerState, value};
+    use crate::{ConsumerState, ProducerState, value};
 
     use super::*;
 
@@ -86,7 +94,8 @@ mod tests {
     fn test_pack_and_unpack() {
         let producer_state = ProducerState::default();
         let mut producer_state_txn = producer_state.txn();
-        let mut consumer_state = ConsumerState::default();
+        let consumer_state = ConsumerState::default();
+        let mut consumer_state_txn = consumer_state.txn();
 
         // Case 1:
         // =====================================================================
@@ -95,15 +104,15 @@ mod tests {
             value: value!(42).unwrap(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn);
+        let packed = message.packed(&mut producer_state_txn).unwrap();
         assert_eq!(packed.bytes(), hex_to_bytes("00 01 00 0c 2a"));
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state).unwrap();
+        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
                 value: value!(42).unwrap()
-            },]
+            }]
         );
 
         // Case 2:
@@ -113,10 +122,10 @@ mod tests {
             value: value!(1).unwrap(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn);
+        let packed = message.packed(&mut producer_state_txn).unwrap();
         assert_eq!(packed.bytes(), hex_to_bytes("00 01 00 01"));
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state).unwrap();
+        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
@@ -131,15 +140,15 @@ mod tests {
             value: value!(0x1FFFFFF).unwrap(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn);
+        let packed = message.packed(&mut producer_state_txn).unwrap();
         assert_eq!(packed.bytes(), hex_to_bytes("00 01 00 0E FF FF FF 01"));
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state).unwrap();
+        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
                 value: value!(0x1FFFFFF).unwrap()
-            },]
+            }]
         );
 
         // Case 4:
@@ -149,15 +158,15 @@ mod tests {
             value: value!(-42).unwrap(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn);
+        let packed = message.packed(&mut producer_state_txn).unwrap();
         assert_eq!(packed.bytes(), hex_to_bytes("00 01 00 1c 29"));
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state).unwrap();
+        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
                 value: value!(-42).unwrap()
-            },]
+            }]
         );
 
         // Case 5:
@@ -167,15 +176,15 @@ mod tests {
             value: value!(-0x1FFFFFF).unwrap(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn);
+        let packed = message.packed(&mut producer_state_txn).unwrap();
         assert_eq!(packed.bytes(), hex_to_bytes("00 01 00 1E FE FF FF 01"));
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state).unwrap();
+        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
                 value: value!(-0x1FFFFFF).unwrap()
-            },]
+            }]
         );
 
         // Case 6:
@@ -185,18 +194,18 @@ mod tests {
             value: value!(3.1415926).unwrap(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn);
+        let packed = message.packed(&mut producer_state_txn).unwrap();
         assert_eq!(
             packed.bytes(),
             hex_to_bytes("00 01 00 7b 4a d8 12 4d fb 21 09 40")
         );
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state).unwrap();
+        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
                 value: value!(3.1415926).unwrap()
-            },]
+            }]
         );
 
         // Case 7:
@@ -211,17 +220,16 @@ mod tests {
             value: value.clone(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn);
+        let packed = message.packed(&mut producer_state_txn).unwrap();
         assert_eq!(
             packed.bytes(),
             hex_to_bytes(indoc::indoc! { r#"
                 01
-                  + 00 // string pool patch
-                      + 02
-                          + 00 // index 0
-                          + 06 61 6e 73 77 65 72 // "answer"
-                          + 01 // index 1
-                          + 02 70 69 // "pi"
+                  + 00 02 // string pool patch, two entries
+                      + 00 // slot 0 -> "answer"
+                      |   + 06 61 6e 73 77 65 72
+                      + 01 // slot 1 -> "pi"
+                          + 02 70 69
                 01
                   + 00
                       + 52
@@ -232,7 +240,7 @@ mod tests {
             "# })
         );
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state).unwrap();
+        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(unpacked.actions, &[Action::Snapshot { value }]);
 
         // Case 8:
@@ -253,28 +261,31 @@ mod tests {
             },
         ]);
 
-        let packed = message.packed(&mut producer_state_txn);
+        let packed = message.packed(&mut producer_state_txn).unwrap();
         assert_eq!(
             packed.bytes(),
             hex_to_bytes(indoc::indoc! { r#"
-                00
-                02
-                  + 01
-                  |   + 02 // path "foo.42"
-                  |   |   + 0c 66 6f 6f
-                  |   |   + a9 01
-                  |   + 52 // value map
-                  |       + 00 // index of string "answer"
-                  |       + 0c 2a // value int(42)
-                  |       + 01 // index of string "pi"
-                  |       + 39 33 2e 31 34 31 35 39 32 36 // value tstr("3.1415926")
-                  + 02
-                      + 01 // path "bar"
+                01
+                  + 01 02 // path pool patch
+                      + 00 02 // slot 0 -> path "foo.42"
+                      |   + 0c 66 6f 6f
+                      |   + a9 01
+                      + 01 01 // slot 1 -> path "bar"
                           + 0c 62 61 72
+                02
+                  + 01 // Add
+                  |   + 00 // ref to path "foo.42"
+                  |   + 52 // the map value
+                  |       + 00
+                  |       + 0c 2a
+                  |       + 01
+                  |       + 39 33 2e 31 34 31 35 39 32 36
+                  + 02 // Delete
+                      + 01
             "# })
         );
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state).unwrap();
+        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(unpacked, message);
 
         // Case 9:
@@ -285,10 +296,11 @@ mod tests {
             value: value.clone(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn);
+        let packed = message.packed(&mut producer_state_txn).unwrap();
         assert_eq!(packed.bytes(), hex_to_bytes("00 01 00 43 76 74 75"));
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state).unwrap();
+        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(unpacked.actions, &[Action::Snapshot { value }]);
+        let _consumer_state = consumer_state_txn.commit();
     }
 }

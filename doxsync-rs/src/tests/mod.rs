@@ -19,7 +19,7 @@ fn test_produce_then_consume_simple_document() {
             value: value!(42).unwrap()
         }]
     );
-    let diff = producer.pack_diff(diff);
+    let diff = producer.pack_diff(diff).unwrap();
 
     // Consume the diff message.
     consumer.consume_diff(diff).unwrap();
@@ -38,7 +38,7 @@ fn test_produce_then_consume_simple_document() {
             value: value!(43).unwrap()
         }]
     );
-    let diff = producer.pack_diff(diff);
+    let diff = producer.pack_diff(diff).unwrap();
 
     // Consume the diff message.
     consumer.consume_diff(diff).unwrap();
@@ -59,7 +59,7 @@ fn test_produce_then_consume_simple_document() {
             value: value!(3.1415926).unwrap()
         }]
     );
-    let diff = producer.pack_diff(diff);
+    let diff = producer.pack_diff(diff).unwrap();
 
     // Consume the diff message.
     consumer.consume_diff(diff).unwrap();
@@ -96,7 +96,7 @@ fn test_produce_then_consume_mapping_document() {
             .unwrap()
         }]
     );
-    let diff = producer.pack_diff(diff);
+    let diff = producer.pack_diff(diff).unwrap();
 
     // Consume the diff message.
     consumer.consume_diff(diff).unwrap();
@@ -124,7 +124,7 @@ fn test_produce_then_consume_mapping_document() {
             value: value!(44).unwrap(),
         }]
     );
-    let diff = producer.pack_diff(diff);
+    let diff = producer.pack_diff(diff).unwrap();
 
     // Consume the diff message.
     consumer.consume_diff(diff).unwrap();

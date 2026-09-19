@@ -1,8 +1,13 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use crate::message::Path;
+
+use super::ConsumerStateTxn;
+
 #[derive(Default)]
 pub(crate) struct ConsumerState {
-    string_pool: BTreeMap<u32, Arc<String>>,
+    pub(super) path_pool: BTreeMap<u32, Arc<Path>>,
+    pub(super) string_pool: BTreeMap<u32, Arc<String>>,
 }
 
 impl ConsumerState {
@@ -10,13 +15,8 @@ impl ConsumerState {
         Self::default()
     }
 
-    pub(crate) fn apply_string_pool_patch(&mut self, patch: Vec<(u32, Arc<String>)>) {
-        for (key, value) in patch {
-            self.string_pool.insert(key, value);
-        }
-    }
-
-    pub(crate) fn get_string(&self, key: u32) -> Option<&Arc<String>> {
-        self.string_pool.get(&key)
+    /// Moves the pools into a transaction without cloning their contents.
+    pub(crate) fn txn(self) -> ConsumerStateTxn {
+        ConsumerStateTxn::new(self)
     }
 }

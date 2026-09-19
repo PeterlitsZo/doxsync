@@ -317,12 +317,13 @@ impl Value {
 }
 
 impl Value {
-    pub(crate) fn hash(&self) -> Hash {
-        self.hash
-    }
-
+    /// A cached, approximate cost for comparing diff plans without encoding.
     pub(crate) fn cost(&self) -> usize {
         self.cost
+    }
+
+    pub(crate) fn hash(&self) -> Hash {
+        self.hash
     }
 
     pub(crate) fn inner(&self) -> &ValueInner {
