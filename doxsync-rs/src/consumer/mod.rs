@@ -21,7 +21,7 @@ impl Consumer {
     /// Applies a packet.
     pub fn consume_diff(&mut self, diff: PackedMessage) -> Result<()> {
         let mut state_txn = self.state.take().expect("consumer state").txn();
-        let result = Message::from_packed(diff, &mut state_txn)
+        let result = Message::decode(diff, &mut state_txn)
             .and_then(|message| Self::apply_message(self.document.as_ref(), &message));
 
         match result {

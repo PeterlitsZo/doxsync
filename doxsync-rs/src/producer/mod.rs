@@ -28,7 +28,7 @@ impl Producer {
     /// Internal state will be updated on success
     pub fn pack_diff(&mut self, diff: Message) -> Result<PackedMessage> {
         let mut txn = self.state.take().expect("producer state").txn();
-        let result = diff.packed(&mut txn);
+        let result = diff.encode(&mut txn);
         self.state = Some(if result.is_ok() {
             txn.commit()
         } else {

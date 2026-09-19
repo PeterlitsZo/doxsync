@@ -26,11 +26,8 @@ impl Message {
     }
 
     /// Leaves successful changes in the transaction; errors restore its entry savepoint.
-    pub(crate) fn from_packed(
-        packed: PackedMessage,
-        state_txn: &mut ConsumerStateTxn,
-    ) -> Result<Self> {
-        packed::PackedMessageDecoder::default().decode(packed.bytes(), state_txn)
+    pub(crate) fn decode(packed: PackedMessage, state_txn: &mut ConsumerStateTxn) -> Result<Self> {
+        packed::PackedMessageDecoder::default().decode(packed, state_txn)
     }
 
     /// Checks encoding resource limits without writing bytes or changing pools.
@@ -38,11 +35,8 @@ impl Message {
         packed::validate_message(&self.actions, state_txn)
     }
 
-    pub(crate) fn packed(&self, state_txn: &mut ProducerStateTxn) -> Result<PackedMessage> {
-        packed::PackedMessageBuilder::default()
-            .with_actions(&self.actions)
-            .with_state_txn(state_txn)
-            .build()
+    pub(crate) fn encode(&self, state_txn: &mut ProducerStateTxn) -> Result<PackedMessage> {
+        packed::PackedMessageEncoder::default().encode(self, state_txn)
     }
 }
 
@@ -104,10 +98,10 @@ mod tests {
             value: value!(42).unwrap(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn).unwrap();
+        let packed = message.encode(&mut producer_state_txn).unwrap();
         assert_eq!(packed.bytes(), hex_to_bytes("00 01 00 0c 2a"));
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
+        let unpacked = Message::decode(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
@@ -122,10 +116,10 @@ mod tests {
             value: value!(1).unwrap(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn).unwrap();
+        let packed = message.encode(&mut producer_state_txn).unwrap();
         assert_eq!(packed.bytes(), hex_to_bytes("00 01 00 01"));
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
+        let unpacked = Message::decode(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
@@ -140,10 +134,10 @@ mod tests {
             value: value!(0x1FFFFFF).unwrap(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn).unwrap();
+        let packed = message.encode(&mut producer_state_txn).unwrap();
         assert_eq!(packed.bytes(), hex_to_bytes("00 01 00 0E FF FF FF 01"));
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
+        let unpacked = Message::decode(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
@@ -158,10 +152,10 @@ mod tests {
             value: value!(-42).unwrap(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn).unwrap();
+        let packed = message.encode(&mut producer_state_txn).unwrap();
         assert_eq!(packed.bytes(), hex_to_bytes("00 01 00 1c 29"));
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
+        let unpacked = Message::decode(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
@@ -176,10 +170,10 @@ mod tests {
             value: value!(-0x1FFFFFF).unwrap(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn).unwrap();
+        let packed = message.encode(&mut producer_state_txn).unwrap();
         assert_eq!(packed.bytes(), hex_to_bytes("00 01 00 1E FE FF FF 01"));
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
+        let unpacked = Message::decode(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
@@ -194,13 +188,13 @@ mod tests {
             value: value!(3.1415926).unwrap(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn).unwrap();
+        let packed = message.encode(&mut producer_state_txn).unwrap();
         assert_eq!(
             packed.bytes(),
             hex_to_bytes("00 01 00 7b 4a d8 12 4d fb 21 09 40")
         );
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
+        let unpacked = Message::decode(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(
             unpacked.actions,
             &[Action::Snapshot {
@@ -220,7 +214,7 @@ mod tests {
             value: value.clone(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn).unwrap();
+        let packed = message.encode(&mut producer_state_txn).unwrap();
         assert_eq!(
             packed.bytes(),
             hex_to_bytes(indoc::indoc! { r#"
@@ -240,7 +234,7 @@ mod tests {
             "# })
         );
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
+        let unpacked = Message::decode(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(unpacked.actions, &[Action::Snapshot { value }]);
 
         // Case 8:
@@ -261,7 +255,7 @@ mod tests {
             },
         ]);
 
-        let packed = message.packed(&mut producer_state_txn).unwrap();
+        let packed = message.encode(&mut producer_state_txn).unwrap();
         assert_eq!(
             packed.bytes(),
             hex_to_bytes(indoc::indoc! { r#"
@@ -285,7 +279,7 @@ mod tests {
             "# })
         );
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
+        let unpacked = Message::decode(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(unpacked, message);
 
         // Case 9:
@@ -296,10 +290,10 @@ mod tests {
             value: value.clone(),
         }]);
 
-        let packed = message.packed(&mut producer_state_txn).unwrap();
+        let packed = message.encode(&mut producer_state_txn).unwrap();
         assert_eq!(packed.bytes(), hex_to_bytes("00 01 00 43 76 74 75"));
 
-        let unpacked = Message::from_packed(packed, &mut consumer_state_txn).unwrap();
+        let unpacked = Message::decode(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(unpacked.actions, &[Action::Snapshot { value }]);
         let _consumer_state = consumer_state_txn.commit();
     }
