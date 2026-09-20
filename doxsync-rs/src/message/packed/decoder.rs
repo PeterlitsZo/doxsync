@@ -195,7 +195,7 @@ impl PackedMessageDecoder {
         Ok(patch)
     }
 
-    fn unpack_path_reference(bytes: &mut &[u8], state: &ConsumerStateTxn) -> Result<Path> {
+    fn unpack_path_by_key(bytes: &mut &[u8], state: &ConsumerStateTxn) -> Result<Path> {
         let id = Self::unpack_varuint(bytes)?;
         if id >= PATH_POOL_CAPACITY as u64 {
             return Err(Error::new(ErrorKind::InvalidData, "path id out of range")
@@ -252,13 +252,18 @@ impl PackedMessageDecoder {
                 Ok(Action::Snapshot { value })
             }
             ACTION_ADD => {
-                let path = Self::unpack_path_reference(bytes, state)?;
+                let path = Self::unpack_path_by_key(bytes, state)?;
                 let value = Self::unpack_value(bytes, state)?;
                 Ok(Action::Add { path, value })
             }
             ACTION_DELETE => {
-                let path = Self::unpack_path_reference(bytes, state)?;
+                let path = Self::unpack_path_by_key(bytes, state)?;
                 Ok(Action::Delete { path })
+            }
+            ACTION_COPY => {
+                let path = Self::unpack_path_by_key(bytes, state)?;
+                let from = Self::unpack_path_by_key(bytes, state)?;
+                Ok(Action::Copy { path, from })
             }
             _ => Err(Error::new(ErrorKind::InvalidData, "invalid action type")),
         }

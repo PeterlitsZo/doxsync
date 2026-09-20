@@ -6,6 +6,7 @@ use crate::{
 
 const COST_ADD: usize = 2;
 const COST_DELETE: usize = 2;
+const COST_COPY: usize = 3;
 
 pub(super) struct Differ<'s> {
     state_txn: &'s ProducerStateTxn,
@@ -46,7 +47,8 @@ impl<'s> DifferInternal<'s> {
         let mut plans = vec![replace_diff_plan];
 
         if old_value.kind() == ValueKind::Map && new_value.kind() == ValueKind::Map {
-            plans.push(self.map_diff_plan(&old_value, &new_value));
+            plans.push(self.map_diff_plan(&old_value, &new_value, false));
+            plans.push(self.map_diff_plan(&old_value, &new_value, true));
         }
 
         // Stable ordering keeps snapshots first when estimated costs tie.
@@ -72,17 +74,38 @@ impl<'s> DifferInternal<'s> {
         }
     }
 
-    fn map_diff_plan(&self, old_value: &Value, new_value: &Value) -> DiffPlan {
+    fn map_diff_plan(&self, old_value: &Value, new_value: &Value, allow_copy: bool) -> DiffPlan {
         let old_map = old_value.as_map().expect("must be map");
         let new_map = new_value.as_map().expect("must be map");
+        let copy_sources = allow_copy.then(|| self.old.hash_map());
 
         let mut actions = vec![];
         let mut cost = 0;
         for (key, value) in new_map.iter() {
             if old_map.get(key) != Some(value) {
+                let path = Path::new(vec![PathSegment::key_arc(key.clone())]);
+                if COST_COPY < COST_ADD + value.cost() {
+                    if let Some((from, _)) = copy_sources
+                        .as_ref()
+                        .and_then(|sources| sources.get(&value.hash()))
+                        .filter(|(from, _)| {
+                            // The consumer currently supports only map source paths.
+                            from.segments()
+                                .iter()
+                                .all(|segment| matches!(segment, PathSegment::Key(_)))
+                        })
+                    {
+                        cost += COST_COPY;
+                        actions.push(Action::Copy {
+                            path,
+                            from: from.clone(),
+                        });
+                        continue;
+                    }
+                }
                 cost += COST_ADD + value.cost();
                 actions.push(Action::Add {
-                    path: Path::new(vec![PathSegment::key_arc(key.clone())]),
+                    path,
                     value: value.clone(),
                 });
             }

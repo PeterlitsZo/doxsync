@@ -8,7 +8,7 @@ use super::{
 };
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum InsertStringResult {
+pub(crate) enum InsertStringPoolResult {
     Existing { key: u32 },
     Inserted { key: u32 },
     Replaced { key: u32 },
@@ -120,22 +120,6 @@ impl ProducerStateTxn {
         }
     }
 
-    pub(crate) fn get_path_key(&self, value: &Path) -> Option<u32> {
-        self.path_pool_reverse.get(value).copied()
-    }
-
-    pub(crate) fn get_string_key(&self, value: &Arc<String>) -> Option<u32> {
-        self.string_pool_reverse.get(value).copied()
-    }
-
-    pub(crate) fn savepoint(&self) -> ProducerStateSavepoint {
-        ProducerStateSavepoint {
-            rollback_log_len: self.rollback_log.len(),
-            string_pool_lru: self.string_pool_lru.savepoint(),
-            path_pool_lru: self.path_pool_lru.savepoint(),
-        }
-    }
-
     pub(crate) fn rollback_to(&mut self, savepoint: ProducerStateSavepoint) {
         assert!(
             savepoint.rollback_log_len <= self.rollback_log.len(),
@@ -157,14 +141,35 @@ impl ProducerStateTxn {
         self.path_pool_lru.rollback_to(savepoint.path_pool_lru);
     }
 
-    pub(crate) fn insert_string(&mut self, value: Arc<String>) -> InsertStringResult {
-        // Check if the string already exists in the pool.
-        if let Some(key) = self.string_pool_reverse.get(&value).copied() {
+    pub(crate) fn savepoint(&self) -> ProducerStateSavepoint {
+        ProducerStateSavepoint {
+            rollback_log_len: self.rollback_log.len(),
+            string_pool_lru: self.string_pool_lru.savepoint(),
+            path_pool_lru: self.path_pool_lru.savepoint(),
+        }
+    }
+
+    pub(crate) fn get_string_key(&self, value: &Arc<String>) -> Option<u32> {
+        self.string_pool_reverse.get(value).copied()
+    }
+
+    pub(crate) fn hit_string_pool_if_exists(&mut self, value: &Arc<String>) {
+        if let Some(_) = self.string_pool_reverse.get(value).copied() {
             assert!(
-                matches!(self.string_pool_lru.put(value), LruPutResult::Updated),
+                matches!(self.string_pool_lru.put(value.clone()), LruPutResult::Updated),
                 "an existing string pool entry must also exist in the LRU"
             );
-            return InsertStringResult::Existing { key };
+        }
+    }
+
+    pub(crate) fn insert_string_pool(&mut self, value: &Arc<String>) -> InsertStringPoolResult {
+        // Check if the string already exists in the pool.
+        if let Some(key) = self.string_pool_reverse.get(value).copied() {
+            assert!(
+                matches!(self.string_pool_lru.put(value.clone()), LruPutResult::Updated),
+                "an existing string pool entry must also exist in the LRU"
+            );
+            return InsertStringPoolResult::Existing { key };
         }
 
         // Check if we need to evict an existing string from the pool.
@@ -195,21 +200,34 @@ impl ProducerStateTxn {
             .alloc()
             .expect("the string pool LRU must leave a free bitmap slot") as u32;
         self.string_pool.insert(key, value.clone());
-        self.string_pool_reverse.insert(value, key);
+        self.string_pool_reverse.insert(value.clone(), key);
         self.rollback_log
             .push(StateRollbackEntry::StringPoolRemove { key });
         if evicted {
-            InsertStringResult::Replaced { key }
+            InsertStringPoolResult::Replaced { key }
         } else {
-            InsertStringResult::Inserted { key }
+            InsertStringPoolResult::Inserted { key }
         }
     }
 
-    pub(crate) fn insert_path(&mut self, value: Arc<Path>) -> InsertPathResult {
-        // Check if the path already exists in the pool.
-        if let Some(key) = self.path_pool_reverse.get(&value).copied() {
+    pub(crate) fn get_path_key(&self, value: &Arc<Path>) -> Option<u32> {
+        self.path_pool_reverse.get(value).copied()
+    }
+
+    pub(crate) fn hit_path_pool_if_exists(&mut self, value: &Arc<Path>) {
+        if let Some(_) = self.path_pool_reverse.get(value).copied() {
             assert!(
-                matches!(self.path_pool_lru.put(value), LruPutResult::Updated),
+                matches!(self.path_pool_lru.put(value.clone()), LruPutResult::Updated),
+                "an existing string pool entry must also exist in the LRU"
+            );
+        }
+    }
+
+    pub(crate) fn insert_path_pool(&mut self, value: &Arc<Path>) -> InsertPathResult {
+        // Check if the path already exists in the pool.
+        if let Some(key) = self.path_pool_reverse.get(value).copied() {
+            assert!(
+                matches!(self.path_pool_lru.put(value.clone()), LruPutResult::Updated),
                 "an existing path pool entry must also exist in the LRU"
             );
             return InsertPathResult::Existing { key };
@@ -243,7 +261,7 @@ impl ProducerStateTxn {
             .alloc()
             .expect("the path pool LRU must leave a free bitmap slot") as u32;
         self.path_pool.insert(key, value.clone());
-        self.path_pool_reverse.insert(value, key);
+        self.path_pool_reverse.insert(value.clone(), key);
         self.rollback_log
             .push(StateRollbackEntry::PathPoolRemove { key });
         if evicted {

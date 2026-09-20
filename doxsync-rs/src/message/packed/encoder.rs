@@ -6,7 +6,7 @@ use std::{
 use super::{PackedMessage, consts::*};
 use crate::message::{Action, Message, Path, PathSegment};
 use crate::state::{
-    InsertPathResult, InsertStringResult, PATH_KEY_BYTES_LIMIT, PATH_PATCH_BYTES_LIMIT,
+    InsertPathResult, InsertStringPoolResult, PATH_KEY_BYTES_LIMIT, PATH_PATCH_BYTES_LIMIT,
     PATH_POOL_CAPACITY, PATH_SEGMENTS_LIMIT, ProducerStateTxn, STRING_POOL_CAPACITY,
 };
 use crate::{Error, ErrorKind, Result, Value, ValueKind};
@@ -78,9 +78,6 @@ impl MessageMetadata {
         state_txn: &ProducerStateTxn,
         actions_limit: usize,
     ) -> Result<Self> {
-        if actions.len() > actions_limit {
-            return Err(Error::new(ErrorKind::InvalidData, "too many actions"));
-        }
         fn collect_strings(
             value: &Value,
             seen: &mut BTreeSet<Arc<String>>,
@@ -110,6 +107,11 @@ impl MessageMetadata {
             }
             Ok(())
         }
+
+        if actions.len() > actions_limit {
+            return Err(Error::new(ErrorKind::InvalidData, "too many actions"));
+        }
+
         let mut strings = Vec::new();
         let mut string_seen = BTreeSet::new();
         let mut paths = Vec::new();
@@ -128,6 +130,14 @@ impl MessageMetadata {
                 Action::Delete { path } => {
                     if path_seen.insert(path) {
                         paths.push(Arc::new(path.clone()));
+                    }
+                }
+                Action::Copy { path, from } => {
+                    if path_seen.insert(path) {
+                        paths.push(Arc::new(path.clone()));
+                    }
+                    if path_seen.insert(from) {
+                        paths.push(Arc::new(from.clone()));
                     }
                 }
             }
@@ -203,12 +213,17 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
                 }
                 Action::Add { path, value } => {
                     self.pack_varuint(bytes, ACTION_ADD as u64);
-                    self.pack_path_reference(bytes, path)?;
+                    self.pack_path_by_key(bytes, &Arc::new(path.clone()))?;
                     self.pack_value(bytes, value);
                 }
                 Action::Delete { path } => {
                     self.pack_varuint(bytes, ACTION_DELETE as u64);
-                    self.pack_path_reference(bytes, path)?;
+                    self.pack_path_by_key(bytes, &Arc::new(path.clone()))?;
+                }
+                Action::Copy { path, from } => {
+                    self.pack_varuint(bytes, ACTION_COPY as u64);
+                    self.pack_path_by_key(bytes, &Arc::new(path.clone()))?;
+                    self.pack_path_by_key(bytes, &Arc::new(from.clone()))?;
                 }
             }
         }
@@ -219,34 +234,27 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
     fn encode_metadata(&mut self, bytes: &mut Vec<u8>) -> Result<()> {
         let MessageMetadata { strings, paths } =
             MessageMetadata::collect(self.actions, self.state_txn, self.actions_limit)?;
-        // Touch every hit first; new entries can then evict only unused old entries.
-        for string in &strings {
-            if self.state_txn.get_string_key(string).is_some() {
-                self.state_txn.insert_string(string.clone());
-            }
-        }
+
         let mut string_patch = Vec::new();
         for string in strings {
+            self.state_txn.hit_string_pool_if_exists(&string);
             if self.state_txn.get_string_key(&string).is_none() {
-                match self.state_txn.insert_string(string.clone()) {
-                    InsertStringResult::Inserted { key } | InsertStringResult::Replaced { key } => {
+                match self.state_txn.insert_string_pool(&string) {
+                    InsertStringPoolResult::Inserted { key } | InsertStringPoolResult::Replaced { key } => {
                         string_patch.push((key, string))
                     }
-                    InsertStringResult::Existing { .. } => unreachable!("new string"),
+                    InsertStringPoolResult::Existing { .. } => unreachable!("new string"),
                 }
             }
         }
-        for path in &paths {
-            if self.state_txn.get_path_key(path).is_some() {
-                self.state_txn.insert_path(path.clone());
-            }
-        }
+
         let mut path_patch = Vec::new();
         for path in paths {
+            self.state_txn.hit_path_pool_if_exists(&path);
             if self.state_txn.get_path_key(&path).is_none() {
                 let mut definition = Vec::new();
                 self.pack_path(&mut definition, &path);
-                match self.state_txn.insert_path(path) {
+                match self.state_txn.insert_path_pool(&path) {
                     InsertPathResult::Inserted { key } | InsertPathResult::Replaced { key } => {
                         path_patch.push((key, definition))
                     }
@@ -254,10 +262,12 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
                 }
             }
         }
+
         self.pack_varuint(
             bytes,
             u64::from(!string_patch.is_empty()) + u64::from(!path_patch.is_empty()),
         );
+
         if !string_patch.is_empty() {
             self.pack_varuint(bytes, 0);
             self.pack_varuint(bytes, string_patch.len() as u64);
@@ -267,6 +277,7 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
                 bytes.extend_from_slice(string.as_bytes());
             }
         }
+
         if !path_patch.is_empty() {
             self.pack_varuint(bytes, 1);
             self.pack_varuint(bytes, path_patch.len() as u64);
@@ -275,10 +286,11 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
                 bytes.extend_from_slice(&definition);
             }
         }
+
         Ok(())
     }
 
-    fn pack_path_reference(&mut self, bytes: &mut Vec<u8>, path: &Path) -> Result<()> {
+    fn pack_path_by_key(&mut self, bytes: &mut Vec<u8>, path: &Arc<Path>) -> Result<()> {
         let key = self
             .state_txn
             .get_path_key(path)

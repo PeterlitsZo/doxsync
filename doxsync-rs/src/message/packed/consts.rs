@@ -14,6 +14,7 @@ pub(super) const PAYLOAD_MASK: u8 = 0x0F;
 pub(super) const ACTION_SNAPSHOT: u8 = 0;
 pub(super) const ACTION_ADD: u8 = 1;
 pub(super) const ACTION_DELETE: u8 = 2;
+pub(super) const ACTION_COPY: u8 = 3;
 
 pub(super) mod posint {
     pub(in crate::message::packed) const INLINE: u8 = 11;

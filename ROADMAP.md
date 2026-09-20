@@ -12,3 +12,4 @@
 - [ ] Support caching BStr values.
 - [ ] Represent each path using a parent reference and the current segment to
       reduce memory usage.
+- [ ] Support `Path::parse("foo.bar.42.'43'")`.

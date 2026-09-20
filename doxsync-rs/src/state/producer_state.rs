@@ -47,7 +47,7 @@ impl ProducerState {
 mod tests {
     use std::sync::Arc;
 
-    use crate::state::{InsertStringResult, ProducerState};
+    use crate::state::{InsertStringPoolResult, ProducerState};
 
     #[test]
     fn state_txn_commit_keeps_changes() {
@@ -55,41 +55,41 @@ mod tests {
 
         let mut txn = state.txn();
         assert_eq!(
-            txn.insert_string(Arc::new("tmp-0000".to_string())),
-            InsertStringResult::Inserted { key: 0 }
+            txn.insert_string_pool(&Arc::new("tmp-0000".to_string())),
+            InsertStringPoolResult::Inserted { key: 0 }
         );
         assert_eq!(
-            txn.insert_string(Arc::new("tmp-0001".to_string())),
-            InsertStringResult::Inserted { key: 1 }
-        );
-        let state = txn.commit();
-
-        let mut txn = state.txn();
-        assert_eq!(
-            txn.insert_string(Arc::new("tmp-0002".to_string())),
-            InsertStringResult::Inserted { key: 2 }
-        );
-        assert_eq!(
-            txn.insert_string(Arc::new("tmp-0000".to_string())),
-            InsertStringResult::Existing { key: 0 }
+            txn.insert_string_pool(&Arc::new("tmp-0001".to_string())),
+            InsertStringPoolResult::Inserted { key: 1 }
         );
         let state = txn.commit();
 
         let mut txn = state.txn();
         assert_eq!(
-            txn.insert_string(Arc::new("tmp-0002".to_string())),
-            InsertStringResult::Existing { key: 2 }
+            txn.insert_string_pool(&Arc::new("tmp-0002".to_string())),
+            InsertStringPoolResult::Inserted { key: 2 }
         );
         assert_eq!(
-            txn.insert_string(Arc::new("tmp-0003".to_string())),
-            InsertStringResult::Inserted { key: 3 }
+            txn.insert_string_pool(&Arc::new("tmp-0000".to_string())),
+            InsertStringPoolResult::Existing { key: 0 }
+        );
+        let state = txn.commit();
+
+        let mut txn = state.txn();
+        assert_eq!(
+            txn.insert_string_pool(&Arc::new("tmp-0002".to_string())),
+            InsertStringPoolResult::Existing { key: 2 }
+        );
+        assert_eq!(
+            txn.insert_string_pool(&Arc::new("tmp-0003".to_string())),
+            InsertStringPoolResult::Inserted { key: 3 }
         );
         let state = txn.rollback();
 
         let mut txn = state.txn();
         assert_eq!(
-            txn.insert_string(Arc::new("tmp-0004".to_string())),
-            InsertStringResult::Inserted { key: 3 }
+            txn.insert_string_pool(&Arc::new("tmp-0004".to_string())),
+            InsertStringPoolResult::Inserted { key: 3 }
         );
         let state = txn.commit();
 
@@ -105,14 +105,14 @@ mod tests {
 
         let mut txn = state.txn();
         assert_eq!(
-            txn.insert_string(Arc::new("tmp-0003".to_string())),
-            InsertStringResult::Inserted { key: 4 }
+            txn.insert_string_pool(&Arc::new("tmp-0003".to_string())),
+            InsertStringPoolResult::Inserted { key: 4 }
         );
         for i in 5..4096 {
             let key = Arc::new(format!("tmp-{:04}", i));
             assert_eq!(
-                txn.insert_string(key),
-                InsertStringResult::Inserted { key: i }
+                txn.insert_string_pool(&key),
+                InsertStringPoolResult::Inserted { key: i }
             );
         }
         let state = txn.commit();
@@ -121,14 +121,14 @@ mod tests {
         // If we try to insert existing string, it should reuse the existing
         // key.
         assert_eq!(
-            txn.insert_string(Arc::new("tmp-0004".to_string())),
-            InsertStringResult::Existing { key: 3 }
+            txn.insert_string_pool(&Arc::new("tmp-0004".to_string())),
+            InsertStringPoolResult::Existing { key: 3 }
         );
         // But if we insert a new string, it should evict the least recently
         // used key.
         assert_eq!(
-            txn.insert_string(Arc::new("tmp-4096".to_string())),
-            InsertStringResult::Replaced { key: 1 }
+            txn.insert_string_pool(&Arc::new("tmp-4096".to_string())),
+            InsertStringPoolResult::Replaced { key: 1 }
         );
         let state = txn.commit();
 
@@ -154,16 +154,16 @@ mod tests {
 
         let mut txn = state.txn();
         assert_eq!(
-            txn.insert_string(Arc::new("tmp-4097".to_string())),
-            InsertStringResult::Replaced { key: 2 }
+            txn.insert_string_pool(&Arc::new("tmp-4097".to_string())),
+            InsertStringPoolResult::Replaced { key: 2 }
         );
         assert_eq!(
-            txn.insert_string(Arc::new("tmp-4098".to_string())),
-            InsertStringResult::Replaced { key: 0 }
+            txn.insert_string_pool(&Arc::new("tmp-4098".to_string())),
+            InsertStringPoolResult::Replaced { key: 0 }
         );
         assert_eq!(
-            txn.insert_string(Arc::new("tmp-4099".to_string())),
-            InsertStringResult::Replaced { key: 4 }
+            txn.insert_string_pool(&Arc::new("tmp-4099".to_string())),
+            InsertStringPoolResult::Replaced { key: 4 }
         );
         let _state = txn.commit();
     }

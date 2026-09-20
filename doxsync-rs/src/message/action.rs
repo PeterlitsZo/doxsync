@@ -24,6 +24,14 @@ pub(crate) enum Action {
         /// The path to delete the value from.
         path: Path,
     },
+
+    /// Copies the value at the given path to another path.
+    Copy {
+        /// The path to copy the value to.
+        path: Path,
+        /// The path to copy the value from.
+        from: Path,
+    }
 }
 
 /// A path in the document.

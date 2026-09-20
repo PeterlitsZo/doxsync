@@ -295,6 +295,33 @@ mod tests {
 
         let unpacked = Message::decode(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(unpacked.actions, &[Action::Snapshot { value }]);
+
+        // Case 10: COPY reuses a destination path and defines a nested source path.
+        // =====================================================================
+
+        let message = Message::new(vec![Action::Copy {
+            path: Path::new(vec![PathSegment::key("bar")]),
+            from: Path::new(vec![PathSegment::key("baz"), PathSegment::key("qux")]),
+        }]);
+
+        let packed = message.encode(&mut producer_state_txn).unwrap();
+        assert_eq!(
+            packed.bytes(),
+            hex_to_bytes(indoc::indoc! { r#"
+                01
+                  + 01 01 // path pool patch, one entry
+                      + 02 02 // slot 2 -> path "baz.qux"
+                          + 0c 62 61 7a
+                          + 0c 71 75 78
+                01
+                  + 03 // Copy
+                      + 01 // destination: existing path "bar"
+                      + 02 // source: new path "baz.qux"
+            "# })
+        );
+
+        let unpacked = Message::decode(packed, &mut consumer_state_txn).unwrap();
+        assert_eq!(unpacked, message);
         let _consumer_state = consumer_state_txn.commit();
     }
 }
