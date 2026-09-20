@@ -121,7 +121,7 @@ impl MessageMetadata {
                 Action::Snapshot { value } => {
                     collect_strings(value, &mut string_seen, &mut strings)?
                 }
-                Action::Add { path, value } => {
+                Action::Add { path, value } | Action::Replace { path, value } => {
                     collect_strings(value, &mut string_seen, &mut strings)?;
                     if path_seen.insert(path) {
                         paths.push(Arc::new(path.clone()));
@@ -180,18 +180,6 @@ fn varuint_len(value: u64) -> usize {
     ((64 - value.leading_zeros()) as usize).max(1).div_ceil(7)
 }
 
-pub(in crate::message) fn validate_message(
-    actions: &[Action],
-    state_txn: &ProducerStateTxn,
-) -> Result<()> {
-    MessageMetadata::collect(
-        actions,
-        state_txn,
-        PackedMessageEncoder::default().actions_limit,
-    )
-    .map(|_| ())
-}
-
 struct PackedMessageEncoderInternal<'a, 's> {
     actions: &'a [Action],
     state_txn: &'s mut ProducerStateTxn,
@@ -213,6 +201,11 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
                 }
                 Action::Add { path, value } => {
                     self.pack_varuint(bytes, ACTION_ADD as u64);
+                    self.pack_path_by_key(bytes, &Arc::new(path.clone()))?;
+                    self.pack_value(bytes, value);
+                }
+                Action::Replace { path, value } => {
+                    self.pack_varuint(bytes, ACTION_REPLACE as u64);
                     self.pack_path_by_key(bytes, &Arc::new(path.clone()))?;
                     self.pack_value(bytes, value);
                 }
@@ -240,9 +233,8 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
             self.state_txn.hit_string_pool_if_exists(&string);
             if self.state_txn.get_string_key(&string).is_none() {
                 match self.state_txn.insert_string_pool(&string) {
-                    InsertStringPoolResult::Inserted { key } | InsertStringPoolResult::Replaced { key } => {
-                        string_patch.push((key, string))
-                    }
+                    InsertStringPoolResult::Inserted { key }
+                    | InsertStringPoolResult::Replaced { key } => string_patch.push((key, string)),
                     InsertStringPoolResult::Existing { .. } => unreachable!("new string"),
                 }
             }

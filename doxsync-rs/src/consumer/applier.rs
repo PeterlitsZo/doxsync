@@ -36,6 +36,13 @@ impl<'d> Applier<'d> {
                     let updated_value = self.apply_add(current, path.segments(), value)?;
                     to_updated = Some(updated_value);
                 }
+                Action::Replace { path, value } => {
+                    let current = to_updated.as_ref().ok_or(Error::new(
+                        ErrorKind::InvalidData,
+                        "cannot replace in an uninitialized document",
+                    ))?;
+                    to_updated = Some(self.apply_replace(current, path.segments(), value)?);
+                }
                 Action::Delete { path } => {
                     let value = to_updated.as_ref().ok_or(Error::new(
                         ErrorKind::InvalidData,
@@ -59,6 +66,10 @@ impl<'d> Applier<'d> {
     }
 
     fn apply_add(&self, current: &Value, path: &[PathSegment], value: &Value) -> Result<Value> {
+        if path.is_empty() {
+            return Ok(value.clone());
+        }
+
         let (segment, remaining_path) = path.split_first().ok_or(Error::new(
             ErrorKind::InvalidData,
             "add path must not be empty",
@@ -78,10 +89,44 @@ impl<'d> Applier<'d> {
                 }
                 Ok(())
             }),
-            PathSegment::Index(_) => Err(Error::new(
-                ErrorKind::InvalidData,
-                "index path segments are not supported",
-            )),
+            PathSegment::Index(idx) => current.as_array_and_modify(|arr| {
+                if remaining_path.is_empty() {
+                    arr.insert(*idx, value.clone());
+                } else {
+                    let child = arr.get(*idx).ok_or(Error::new(
+                        ErrorKind::InvalidData,
+                        "add path does not exist",
+                    ))?;
+                    let updated_child = self.apply_add(child, remaining_path, value)?;
+                    arr[*idx] = updated_child;
+                }
+                Ok(())
+            }),
+        }
+    }
+
+    fn apply_replace(&self, current: &Value, path: &[PathSegment], value: &Value) -> Result<Value> {
+        let Some((segment, remaining_path)) = path.split_first() else {
+            return Ok(value.clone());
+        };
+
+        match segment {
+            PathSegment::Key(key) => current.as_map_and_modify(|map| {
+                let child = map.get_mut(key).ok_or(Error::new(
+                    ErrorKind::InvalidData,
+                    "replace path does not exist",
+                ))?;
+                *child = self.apply_replace(child, remaining_path, value)?;
+                Ok(())
+            }),
+            PathSegment::Index(idx) => current.as_array_and_modify(|arr| {
+                let child = arr.get_mut(*idx).ok_or(Error::new(
+                    ErrorKind::InvalidData,
+                    "replace path does not exist",
+                ))?;
+                *child = self.apply_replace(child, remaining_path, value)?;
+                Ok(())
+            }),
         }
     }
 
@@ -105,12 +150,17 @@ impl<'d> Applier<'d> {
                         ErrorKind::InvalidData,
                         "copy source path does not exist",
                     ))?,
-                PathSegment::Index(_) => {
-                    return Err(Error::new(
+                PathSegment::Index(idx) => value
+                    .as_array()
+                    .ok_or(Error::new(
+                        ErrorKind::UnexpectedType,
+                        "expected a array value",
+                    ))?
+                    .get(*idx)
+                    .ok_or(Error::new(
                         ErrorKind::InvalidData,
-                        "index path segments are not supported",
-                    ));
-                }
+                        "copy source path does not exist",
+                    ))?,
             };
         }
         self.apply_add(current, path, value)
@@ -139,10 +189,19 @@ impl<'d> Applier<'d> {
                 }
                 Ok(())
             }),
-            PathSegment::Index(_) => Err(Error::new(
-                ErrorKind::InvalidData,
-                "index path segments are not supported",
-            )),
+            PathSegment::Index(idx) => current.as_array_and_modify(|arr| {
+                let child = arr.get(*idx).ok_or(Error::new(
+                    ErrorKind::InvalidData,
+                    "delete path does not exist",
+                ))?;
+                if remaining_path.is_empty() {
+                    arr.remove(*idx);
+                } else {
+                    let updated_child = self.apply_delete(child, remaining_path)?;
+                    arr[*idx] = updated_child;
+                }
+                Ok(())
+            }),
         }
     }
 }

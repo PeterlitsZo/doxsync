@@ -25,14 +25,13 @@ impl Message {
         &self.actions
     }
 
+    pub(crate) fn into_actions(self) -> Vec<Action> {
+        self.actions
+    }
+
     /// Leaves successful changes in the transaction; errors restore its entry savepoint.
     pub(crate) fn decode(packed: PackedMessage, state_txn: &mut ConsumerStateTxn) -> Result<Self> {
         packed::PackedMessageDecoder::default().decode(packed, state_txn)
-    }
-
-    /// Checks encoding resource limits without writing bytes or changing pools.
-    pub(crate) fn validate(&self, state_txn: &ProducerStateTxn) -> Result<()> {
-        packed::validate_message(&self.actions, state_txn)
     }
 
     pub(crate) fn encode(&self, state_txn: &mut ProducerStateTxn) -> Result<PackedMessage> {

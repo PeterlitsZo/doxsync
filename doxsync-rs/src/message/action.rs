@@ -1,5 +1,7 @@
 use std::{fmt::Debug, sync::Arc};
 
+#[cfg(test)]
+use crate::Result;
 use crate::Value;
 
 /// A doxsync action.
@@ -19,6 +21,14 @@ pub(crate) enum Action {
         value: Value,
     },
 
+    /// Replaces an existing value without inserting or shifting array elements.
+    Replace {
+        /// The path of the existing value; an empty path replaces the root.
+        path: Path,
+        /// The replacement value.
+        value: Value,
+    },
+
     /// Deletes the value at the given path.
     Delete {
         /// The path to delete the value from.
@@ -31,6 +41,29 @@ pub(crate) enum Action {
         path: Path,
         /// The path to copy the value from.
         from: Path,
+    },
+}
+
+#[cfg(test)]
+impl Action {
+    pub(crate) fn snapshot(value: Value) -> Self {
+        Self::Snapshot { value }
+    }
+
+    pub(crate) fn add(path: Path, value: Value) -> Self {
+        Self::Add { path, value }
+    }
+
+    pub(crate) fn delete(path: Path) -> Self {
+        Self::Delete { path }
+    }
+
+    pub(crate) fn replace(path: Path, value: Value) -> Self {
+        Self::Replace { path, value }
+    }
+
+    pub(crate) fn copy(path: Path, from: Path) -> Self {
+        Self::Copy { path, from }
     }
 }
 
@@ -63,6 +96,101 @@ impl Path {
 
     pub(crate) fn new(inner: Vec<PathSegment>) -> Self {
         Self { inner }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn parse(path: &str) -> Result<Self> {
+        use crate::{Error, ErrorKind};
+
+        let mut segments = vec![];
+        let chars = path.chars().collect::<Vec<_>>();
+        let mut i = 0;
+        loop {
+            if i >= chars.len() {
+                break;
+            }
+            match chars[i] {
+                '0'..='9' => {
+                    let mut num = 0;
+                    while i < chars.len() {
+                        match chars[i] {
+                            '0'..='9' => {
+                                num = num * 10 + (chars[i] as usize - '0' as usize);
+                                i += 1;
+                            }
+                            '.' => {
+                                i += 1;
+                                break;
+                            }
+                            _ => {
+                                return Err(Error::new(
+                                    crate::ErrorKind::InvalidData,
+                                    "expected digit",
+                                )
+                                .with_metadata("index", i));
+                            }
+                        }
+                    }
+                    segments.push(PathSegment::Index(num));
+                }
+                '.' => {
+                    return Err(Error::new(
+                        crate::ErrorKind::InvalidData,
+                        "unexpected character '.'",
+                    )
+                    .with_metadata("index", i));
+                }
+                '\'' => {
+                    let mut key = String::new();
+                    while i < chars.len() {
+                        match chars[i] {
+                            '\'' => {
+                                i += 1;
+                                break;
+                            }
+                            '\\' => {
+                                i += 1;
+                                key.push(chars[i]);
+                                i += 1;
+                            }
+                            _ => {
+                                key.push(chars[i]);
+                                i += 1;
+                            }
+                        }
+                    }
+                    segments.push(PathSegment::Key(Arc::new(key)));
+                }
+                _ => {
+                    let mut key = String::new();
+                    while i < chars.len() {
+                        match chars[i] {
+                            '.' => {
+                                i += 1;
+                                break;
+                            }
+                            '\'' | '\\' => {
+
+                                return Err(Error::new(
+                                    ErrorKind::InvalidData,
+                                    "invalid character in key",
+                                ));
+                            }
+                            _ => {
+                                key.push(chars[i]);
+                                i += 1;
+                            }
+                        }
+                    }
+                    segments.push(PathSegment::Key(Arc::new(key)));
+                }
+            }
+        }
+        Ok(Self::new(segments))
     }
 
     pub(crate) fn segments(&self) -> &[PathSegment] {

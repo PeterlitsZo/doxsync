@@ -68,10 +68,9 @@ impl Producer {
         let result = match &self.last_emited_document {
             Some(last) => Differ::new(&txn).diff(last, &self.current_document),
             None => {
-                let message = Message::new(vec![Action::Snapshot {
+                Ok(Message::new(vec![Action::Snapshot {
                     value: self.current_document.value(),
-                }]);
-                message.validate(&txn).map(|_| message)
+                }]))
             }
         };
         self.state = Some(txn.rollback());

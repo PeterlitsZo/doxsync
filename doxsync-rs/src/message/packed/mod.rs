@@ -3,7 +3,7 @@ mod decoder;
 mod encoder;
 
 pub(super) use decoder::PackedMessageDecoder;
-pub(super) use encoder::{PackedMessageEncoder, validate_message};
+pub(super) use encoder::PackedMessageEncoder;
 
 /// A packed doxsync message.
 pub struct PackedMessage {

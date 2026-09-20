@@ -256,6 +256,11 @@ impl PackedMessageDecoder {
                 let value = Self::unpack_value(bytes, state)?;
                 Ok(Action::Add { path, value })
             }
+            ACTION_REPLACE => {
+                let path = Self::unpack_path_by_key(bytes, state)?;
+                let value = Self::unpack_value(bytes, state)?;
+                Ok(Action::Replace { path, value })
+            }
             ACTION_DELETE => {
                 let path = Self::unpack_path_by_key(bytes, state)?;
                 Ok(Action::Delete { path })

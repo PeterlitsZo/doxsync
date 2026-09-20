@@ -1,12 +1,14 @@
 use crate::{
-    Document, ErrorKind, Message, Result, Value, ValueKind,
+    Document, Message, Result, Value, ValueKind,
     message::{Action, Path, PathSegment},
     state::ProducerStateTxn,
 };
 
-const COST_ADD: usize = 2;
-const COST_DELETE: usize = 2;
-const COST_COPY: usize = 3;
+const COST_SNAPSHOT: usize = 1;
+const COST_ADD: usize = 1 + 3;
+const COST_REPLACE: usize = 1 + 3;
+const COST_DELETE: usize = 1 + 3;
+const COST_COPY: usize = 1 + 3 * 2;
 
 pub(super) struct Differ<'s> {
     state_txn: &'s ProducerStateTxn,
@@ -19,7 +21,7 @@ impl<'s> Differ<'s> {
 
     pub(super) fn diff(&self, old: &Document, new: &Document) -> Result<Message> {
         let internal = DifferInternal::new(self.state_txn, old, new);
-        let diff_plan = internal.choose_best_diff_plan()?;
+        let diff_plan = internal.calaculate_diff_plan();
         Ok(diff_plan.message)
     }
 }
@@ -39,83 +41,143 @@ impl<'s> DifferInternal<'s> {
         }
     }
 
-    fn choose_best_diff_plan(&self) -> Result<DiffPlan> {
+    fn calaculate_diff_plan(&self) -> DiffPlan {
         let old_value = self.old.value();
         let new_value = self.new.value();
 
-        let replace_diff_plan = self.replace_diff_plan();
-        let mut plans = vec![replace_diff_plan];
-
-        if old_value.kind() == ValueKind::Map && new_value.kind() == ValueKind::Map {
-            plans.push(self.map_diff_plan(&old_value, &new_value, false));
-            plans.push(self.map_diff_plan(&old_value, &new_value, true));
-        }
-
-        // Stable ordering keeps snapshots first when estimated costs tie.
-        // Validate in cost order without encoding or changing the pools.
-        plans.sort_by_key(|plan| plan.cost);
-        let mut rejected = None;
-        for plan in plans {
-            match plan.message.validate(self.state_txn) {
-                Ok(()) => return Ok(plan),
-                Err(error) if error.kind() == ErrorKind::InvalidData => rejected = Some(error),
-                Err(error) => return Err(error),
-            }
-        }
-        Err(rejected.expect("at least one candidate"))
+        self.common_diff_plan(Path::empty(), Some(&old_value), &new_value)
     }
 
-    fn replace_diff_plan(&self) -> DiffPlan {
-        let new_value = self.new.value();
-        let cost = new_value.cost();
+    fn choose_best_diff_plan(&self, mut plans: Vec<DiffPlan>) -> DiffPlan {
+        plans.sort_by_key(|plan| plan.cost);
+        plans.first().expect("must have at least one plan").clone()
+    }
+
+    fn common_diff_plan(
+        &self,
+        path: Path,
+        old_value: Option<&Value>,
+        new_value: &Value,
+    ) -> DiffPlan {
+        let add_value_plan = || -> DiffPlan {
+            let mut plans = vec![];
+
+            // Just use action SNAPSHOT or ADD.
+            if path.is_empty() {
+                plans.push(DiffPlan {
+                    message: Message::new(vec![Action::Snapshot {
+                        value: new_value.clone(),
+                    }]),
+                    cost: COST_SNAPSHOT + new_value.cost(),
+                });
+            } else {
+                plans.push(DiffPlan {
+                    message: Message::new(vec![Action::Add {
+                        path: path.clone(),
+                        value: new_value.clone(),
+                    }]),
+                    cost: COST_ADD + new_value.cost(),
+                });
+            };
+
+            // Use action COPY.
+            if let Some((source_path, _)) = self.old.hash_map().get(&new_value.hash()) {
+                plans.push(DiffPlan {
+                    message: Message::new(vec![Action::Copy {
+                        path: path.clone(),
+                        from: source_path.clone(),
+                    }]),
+                    cost: COST_COPY,
+                });
+            }
+
+            self.choose_best_diff_plan(plans)
+        };
+
+        let Some(old_value) = old_value else {
+            return add_value_plan();
+        };
+
+        if old_value.kind() == ValueKind::Map && new_value.kind() == ValueKind::Map {
+            return self.map_diff_plan(path, &old_value, &new_value);
+        } else if old_value.kind() == ValueKind::Array && new_value.kind() == ValueKind::Array {
+            return self.array_diff_plan(path, old_value, new_value);
+        } else {
+            return add_value_plan();
+        }
+    }
+
+    fn array_diff_plan(&self, path: Path, old_value: &Value, new_value: &Value) -> DiffPlan {
+        let old_array = old_value.as_array().expect("must be array");
+        let new_array = new_value.as_array().expect("must be array");
+        let mut actions = vec![];
+        let mut cost = 0;
+
+        for (index, new_value) in new_array.iter().enumerate() {
+            let old_value = old_array.get(index);
+            if old_value == Some(new_value) {
+                continue;
+            }
+            let mut path = path.clone();
+            path.push_segment(PathSegment::index(index));
+
+            let plan = match old_value {
+                Some(old_value)
+                    if old_value.kind() != new_value.kind()
+                        || !matches!(new_value.kind(), ValueKind::Map | ValueKind::Array) =>
+                {
+                    DiffPlan {
+                        message: Message::new(vec![Action::Replace {
+                            path,
+                            value: new_value.clone(),
+                        }]),
+                        cost: COST_REPLACE + new_value.cost(),
+                    }
+                }
+                _ => self.common_diff_plan(path, old_value, new_value),
+            };
+            cost += plan.cost;
+            actions.extend(plan.message.into_actions());
+        }
+
+        // Remove from the end so earlier indices stay valid.
+        for index in (new_array.len()..old_array.len()).rev() {
+            let mut path = path.clone();
+            path.push_segment(PathSegment::index(index));
+            cost += COST_DELETE;
+            actions.push(Action::Delete { path });
+        }
+
         DiffPlan {
-            message: Message::new(vec![Action::Snapshot { value: new_value }]),
+            message: Message::new(actions),
             cost,
         }
     }
 
-    fn map_diff_plan(&self, old_value: &Value, new_value: &Value, allow_copy: bool) -> DiffPlan {
+    fn map_diff_plan(&self, path: Path, old_value: &Value, new_value: &Value) -> DiffPlan {
         let old_map = old_value.as_map().expect("must be map");
         let new_map = new_value.as_map().expect("must be map");
-        let copy_sources = allow_copy.then(|| self.old.hash_map());
 
         let mut actions = vec![];
         let mut cost = 0;
-        for (key, value) in new_map.iter() {
-            if old_map.get(key) != Some(value) {
-                let path = Path::new(vec![PathSegment::key_arc(key.clone())]);
-                if COST_COPY < COST_ADD + value.cost() {
-                    if let Some((from, _)) = copy_sources
-                        .as_ref()
-                        .and_then(|sources| sources.get(&value.hash()))
-                        .filter(|(from, _)| {
-                            // The consumer currently supports only map source paths.
-                            from.segments()
-                                .iter()
-                                .all(|segment| matches!(segment, PathSegment::Key(_)))
-                        })
-                    {
-                        cost += COST_COPY;
-                        actions.push(Action::Copy {
-                            path,
-                            from: from.clone(),
-                        });
-                        continue;
-                    }
-                }
-                cost += COST_ADD + value.cost();
-                actions.push(Action::Add {
-                    path,
-                    value: value.clone(),
-                });
+        for (key, new_value) in new_map.iter() {
+            let old_value = old_map.get(key);
+            if old_value != Some(new_value) {
+                let mut path = path.clone();
+                path.push_segment(PathSegment::key_arc(key.clone()));
+
+                let plan = self.common_diff_plan(path.clone(), old_value, new_value);
+                cost += plan.cost;
+                actions.extend(plan.message.into_actions());
             }
         }
         for key in old_map.keys() {
             if !new_map.contains_key(key) {
+                let mut path = path.clone();
+                path.push_segment(PathSegment::key_arc(key.clone()));
+
                 cost += COST_DELETE;
-                actions.push(Action::Delete {
-                    path: Path::new(vec![PathSegment::key_arc(key.clone())]),
-                });
+                actions.push(Action::Delete { path });
             }
         }
 
@@ -126,6 +188,7 @@ impl<'s> DifferInternal<'s> {
     }
 }
 
+#[derive(Clone)]
 struct DiffPlan {
     message: Message,
     cost: usize,
@@ -196,16 +259,19 @@ mod tests {
             &new,
             Message::new(vec![
                 Action::Add {
-                    path: Path::new(vec![PathSegment::key("config")]),
-                    value: value!({
-                        "flags": [true, null],
-                        "region": "eu-west-1",
-                        "replicas": 3,
-                    })
-                    .unwrap(),
+                    path: Path::parse("config.flags").unwrap(),
+                    value: value!([true, null]).unwrap(),
                 },
                 Action::Add {
-                    path: Path::new(vec![PathSegment::key("features")]),
+                    path: Path::parse("config.region").unwrap(),
+                    value: value!("eu-west-1").unwrap(),
+                },
+                Action::Add {
+                    path: Path::parse("config.replicas").unwrap(),
+                    value: value!(3).unwrap(),
+                },
+                Action::Add {
+                    path: Path::parse("features").unwrap(),
                     value: value!({
                         "audit": true,
                         "search": false,
@@ -213,7 +279,7 @@ mod tests {
                     .unwrap(),
                 },
                 Action::Delete {
-                    path: Path::new(vec![PathSegment::key("obsolete")]),
+                    path: Path::parse("obsolete").unwrap(),
                 },
             ]),
         );
@@ -240,14 +306,13 @@ mod tests {
         assert_diff_plan(
             &old,
             &new,
-            Message::new(vec![Action::Snapshot {
-                value: value!({
-                    "a": true,
-                    "b": 2.0,
-                    "e": false,
-                })
-                .unwrap(),
-            }]),
+            Message::new(vec![
+                Action::add(Path::parse("a").unwrap(), value!(true).unwrap()),
+                Action::add(Path::parse("b").unwrap(), value!(2.0).unwrap()),
+                Action::add(Path::parse("e").unwrap(), value!(false).unwrap()),
+                Action::delete(Path::parse("c").unwrap()),
+                Action::delete(Path::parse("d").unwrap()),
+            ]),
         );
 
         // Case 4: when snapshot and map diff costs tie, snapshot wins because
@@ -258,9 +323,10 @@ mod tests {
         assert_diff_plan(
             &old,
             &new,
-            Message::new(vec![Action::Snapshot {
-                value: value!({ "id": true }).unwrap(),
-            }]),
+            Message::new(vec![Action::add(
+                Path::parse("id").unwrap(),
+                value!(true).unwrap(),
+            )]),
         );
 
         // Case 5: an unchanged complex map produces no actions.
@@ -292,5 +358,35 @@ mod tests {
             .unwrap(),
         );
         assert_diff_plan(&old, &new, Message::new(vec![]));
+
+        // Case 6: Support copy from array.
+        // =====================================================================
+        let old = Document::new(
+            value!({
+                "a": [
+                    { "id": 1 },
+                    { "id": 2 },
+                ]
+            })
+            .unwrap(),
+        );
+        let new = Document::new(
+            value!({
+                "a": [
+                    { "id": 1 },
+                    { "id": 2 },
+                ],
+                "b": { "id": 1 }
+            })
+            .unwrap(),
+        );
+        assert_diff_plan(
+            &old,
+            &new,
+            Message::new(vec![Action::copy(
+                Path::parse("b").unwrap(),
+                Path::parse("a.0").unwrap(),
+            )]),
+        );
     }
 }
