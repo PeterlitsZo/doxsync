@@ -318,7 +318,7 @@ fn test_produce_then_consume_003() {
         &mut producer,
         &mut consumer,
         &document,
-        &[Action::copy(Path::empty(), Path::parse("foo").unwrap())],
+        &[Action::snapshot(value!(42).unwrap())],
     );
 
     // Case 2:

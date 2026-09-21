@@ -41,6 +41,14 @@ impl<'s> DifferInternal<'s> {
         }
     }
 
+    fn value_cost(&self, value: &Value) -> usize {
+        self.new
+            .index()
+            .get(&value.hash())
+            .expect("new value must be indexed")
+            .cost
+    }
+
     fn calaculate_diff_plan(&self) -> DiffPlan {
         let old_value = self.old.value();
         let new_value = self.new.value();
@@ -68,7 +76,7 @@ impl<'s> DifferInternal<'s> {
                     message: Message::new(vec![Action::Snapshot {
                         value: new_value.clone(),
                     }]),
-                    cost: COST_SNAPSHOT + new_value.cost(),
+                    cost: COST_SNAPSHOT + self.value_cost(new_value),
                 });
             } else {
                 plans.push(DiffPlan {
@@ -76,16 +84,17 @@ impl<'s> DifferInternal<'s> {
                         path: path.clone(),
                         value: new_value.clone(),
                     }]),
-                    cost: COST_ADD + new_value.cost(),
+                    cost: COST_ADD + self.value_cost(new_value),
                 });
             };
 
             // Use action COPY.
-            if let Some((source_path, _)) = self.old.hash_map().get(&new_value.hash()) {
+            if let Some(entry) = self.old.index().get(&new_value.hash()) {
+                debug_assert_eq!(&entry.value, new_value);
                 plans.push(DiffPlan {
                     message: Message::new(vec![Action::Copy {
                         path: path.clone(),
-                        from: source_path.clone(),
+                        from: entry.path.clone(),
                     }]),
                     cost: COST_COPY,
                 });
@@ -131,7 +140,7 @@ impl<'s> DifferInternal<'s> {
                             path,
                             value: new_value.clone(),
                         }]),
-                        cost: COST_REPLACE + new_value.cost(),
+                        cost: COST_REPLACE + self.value_cost(new_value),
                     }
                 }
                 _ => self.common_diff_plan(path, old_value, new_value),

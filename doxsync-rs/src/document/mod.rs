@@ -4,16 +4,22 @@ use blake3::Hash;
 
 use crate::{
     Result, Value, ValueKind,
-    message::{Path, PathSegment},
+    message::{Path, PathSegment, value_own_cost},
 };
+
+pub(crate) struct IndexEntry {
+    pub(crate) path: Path,
+    pub(crate) value: Value,
+    pub(crate) cost: usize,
+}
 
 /// The doxsync document type.
 ///
 /// Very cheap to clone.
 #[derive(Clone)]
 pub struct Document {
-    /// The hash map of values in the document.
-    hash_map: Arc<HashMap<Hash, (Path, Value)>>,
+    /// Nodes indexed by content hash, with one representative path per hash.
+    index: Arc<HashMap<Hash, IndexEntry>>,
 
     /// The root value of the document.
     value: Value,
@@ -34,7 +40,7 @@ impl Debug for Document {
 impl Document {
     pub fn new(value: Value) -> Self {
         Self {
-            hash_map: Self::build_hash_map(&value),
+            index: Self::build_index(&value, None),
             value,
         }
     }
@@ -50,48 +56,75 @@ impl Document {
         let mut value = self.value.clone();
         f(&mut value)?;
         Ok(Self {
-            hash_map: Self::build_hash_map(&value),
+            index: Self::build_index(&value, Some(&self.index)),
             value,
         })
     }
 
-    pub(crate) fn hash_map(&self) -> Arc<HashMap<Hash, (Path, Value)>> {
-        self.hash_map.clone()
+    pub(crate) fn index(&self) -> Arc<HashMap<Hash, IndexEntry>> {
+        self.index.clone()
     }
 
-    fn build_hash_map(value: &Value) -> Arc<HashMap<Hash, (Path, Value)>> {
-        let mut hash_map = HashMap::new();
-
-        fn update_hash_map(
-            hash_map: &mut HashMap<Hash, (Path, Value)>,
+    fn build_index(
+        value: &Value,
+        prev_index: Option<&HashMap<Hash, IndexEntry>>,
+    ) -> Arc<HashMap<Hash, IndexEntry>> {
+        fn update_index(
+            index: &mut HashMap<Hash, IndexEntry>,
+            prev_index: Option<&HashMap<Hash, IndexEntry>>,
             path: &mut Path,
             value: &Value,
-        ) {
-            hash_map.insert(value.hash(), (path.clone(), value.clone()));
+        ) -> usize {
+            let hash = value.hash();
+            let cached_cost = index
+                .get(&hash)
+                .or_else(|| prev_index.and_then(|previous| previous.get(&hash)))
+                .map(|entry| entry.cost);
+            let mut cost = cached_cost.unwrap_or_else(|| value_own_cost(value));
 
+            // Even cached subtrees need fresh paths and entries for all
+            // descendants.
             match value.kind() {
                 ValueKind::Array => {
-                    let array = value.as_array().expect("value must be an array");
-                    for (inedx, item) in array.iter().enumerate() {
-                        path.push_segment(PathSegment::Index(inedx));
-                        update_hash_map(hash_map, path, item);
+                    for (position, item) in value
+                        .as_array()
+                        .expect("value must be an array")
+                        .iter()
+                        .enumerate()
+                    {
+                        path.push_segment(PathSegment::Index(position));
+                        let child_cost = update_index(index, prev_index, path, item);
+                        if cached_cost.is_none() {
+                            cost += child_cost;
+                        }
                         path.pop_segment();
                     }
                 }
                 ValueKind::Map => {
-                    let map = value.as_map().expect("value must be a map");
-                    for (key, item) in map {
+                    for (key, item) in value.as_map().expect("value must be a map") {
                         path.push_segment(PathSegment::Key(key.clone()));
-                        update_hash_map(hash_map, path, item);
+                        let child_cost = update_index(index, prev_index, path, item);
+                        if cached_cost.is_none() {
+                            cost += child_cost;
+                        }
                         path.pop_segment();
                     }
                 }
                 _ => {}
             }
+            index.insert(
+                hash,
+                IndexEntry {
+                    path: path.clone(),
+                    value: value.clone(),
+                    cost,
+                },
+            );
+            cost
         }
-        let mut tmp = Path::empty();
-        update_hash_map(&mut hash_map, &mut tmp, &value);
 
-        Arc::new(hash_map)
+        let mut index = HashMap::new();
+        update_index(&mut index, prev_index, &mut Path::empty(), value);
+        Arc::new(index)
     }
 }

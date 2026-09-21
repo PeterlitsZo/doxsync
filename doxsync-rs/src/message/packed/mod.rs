@@ -1,9 +1,12 @@
 mod consts;
+mod cost;
 mod decoder;
 mod encoder;
 
 pub(super) use decoder::PackedMessageDecoder;
 pub(super) use encoder::PackedMessageEncoder;
+
+pub(crate) use cost::value_own_cost;
 
 /// A packed doxsync message.
 pub struct PackedMessage {

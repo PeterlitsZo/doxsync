@@ -2,6 +2,7 @@ mod action;
 mod packed;
 
 pub use packed::PackedMessage;
+pub(crate) use packed::value_own_cost;
 
 pub(crate) use action::{Action, Path, PathSegment};
 

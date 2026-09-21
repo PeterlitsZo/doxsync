@@ -3,7 +3,11 @@ use std::{
     sync::Arc,
 };
 
-use super::{PackedMessage, consts::*};
+use super::{
+    PackedMessage,
+    consts::*,
+    cost::{payload_width, varuint_len},
+};
 use crate::message::{Action, Message, Path, PathSegment};
 use crate::state::{
     InsertPathResult, InsertStringPoolResult, PATH_KEY_BYTES_LIMIT, PATH_PATCH_BYTES_LIMIT,
@@ -176,10 +180,6 @@ impl MessageMetadata {
     }
 }
 
-fn varuint_len(value: u64) -> usize {
-    ((64 - value.leading_zeros()) as usize).max(1).div_ceil(7)
-}
-
 struct PackedMessageEncoderInternal<'a, 's> {
     actions: &'a [Action],
     state_txn: &'s mut ProducerStateTxn,
@@ -329,21 +329,22 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
     }
 
     fn pack_posint(&mut self, bytes: &mut Vec<u8>, value: u64) {
-        if value <= posint::INLINE as u64 {
+        let width = payload_width(value, posint::INLINE);
+        if width == 0 {
             // Pack small values directly as bytes.
             bytes.push((TAG_POSINT << TAG_WIDTH) | (value as u8));
             return;
-        } else if value < (1 << 8) {
+        } else if width == 1 {
             // Pack 1-byte values with type indicator.
             bytes.push((TAG_POSINT << TAG_WIDTH) | posint::BITS_8);
             bytes.push(value as u8);
             return;
-        } else if value < (1 << 16) {
+        } else if width == 2 {
             // Pack 2-byte values with type indicator.
             bytes.push((TAG_POSINT << TAG_WIDTH) | posint::BITS_16);
             bytes.extend_from_slice(&(value as u16).to_le_bytes());
             return;
-        } else if value < (1 << 32) {
+        } else if width == 4 {
             // Pack 4-byte values with type indicator.
             bytes.push((TAG_POSINT << TAG_WIDTH) | posint::BITS_32);
             bytes.extend_from_slice(&(value as u32).to_le_bytes());
@@ -357,21 +358,22 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
     }
 
     fn pack_negint(&mut self, bytes: &mut Vec<u8>, value: u64) {
-        if value <= negint::INLINE as u64 {
+        let width = payload_width(value, negint::INLINE);
+        if width == 0 {
             // Pack small values directly as bytes.
             bytes.push((TAG_NEGINT << TAG_WIDTH) | (value as u8));
             return;
-        } else if value < (1 << 8) {
+        } else if width == 1 {
             // Pack 1-byte values with type indicator.
             bytes.push((TAG_NEGINT << TAG_WIDTH) | negint::BITS_8);
             bytes.push(value as u8);
             return;
-        } else if value < (1 << 16) {
+        } else if width == 2 {
             // Pack 2-byte values with type indicator.
             bytes.push((TAG_NEGINT << TAG_WIDTH) | negint::BITS_16);
             bytes.extend_from_slice(&(value as u16).to_le_bytes());
             return;
-        } else if value < (1 << 32) {
+        } else if width == 4 {
             // Pack 4-byte values with type indicator.
             bytes.push((TAG_NEGINT << TAG_WIDTH) | negint::BITS_32);
             bytes.extend_from_slice(&(value as u32).to_le_bytes());
@@ -387,15 +389,16 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
     fn pack_bstr(&mut self, bytes: &mut Vec<u8>, value: &[u8]) {
         let value_len = value.len();
 
-        if value_len <= bstr::INLINE as usize {
+        let width = payload_width(value_len as u64, bstr::INLINE);
+        if width == 0 {
             bytes.push((TAG_BSTR << TAG_WIDTH) | (value_len as u8));
-        } else if value_len < (1 << 8) {
+        } else if width == 1 {
             bytes.push((TAG_BSTR << TAG_WIDTH) | bstr::BITS_8);
             bytes.extend_from_slice(&(value_len as u8).to_le_bytes());
-        } else if value_len < (1 << 16) {
+        } else if width == 2 {
             bytes.push((TAG_BSTR << TAG_WIDTH) | bstr::BITS_16);
             bytes.extend_from_slice(&(value_len as u16).to_le_bytes());
-        } else if value_len < (1 << 32) {
+        } else if width == 4 {
             bytes.push((TAG_BSTR << TAG_WIDTH) | bstr::BITS_32);
             bytes.extend_from_slice(&(value_len as u32).to_le_bytes());
         } else {
@@ -410,15 +413,16 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
         let value = value.as_bytes();
         let value_len = value.len();
 
-        if value_len <= tstr::INLINE as usize {
+        let width = payload_width(value_len as u64, tstr::INLINE);
+        if width == 0 {
             bytes.push((TAG_TSTR << TAG_WIDTH) | (value_len as u8));
-        } else if value_len < (1 << 8) {
+        } else if width == 1 {
             bytes.push((TAG_TSTR << TAG_WIDTH) | tstr::BITS_8);
             bytes.extend_from_slice(&(value_len as u8).to_le_bytes());
-        } else if value_len < (1 << 16) {
+        } else if width == 2 {
             bytes.push((TAG_TSTR << TAG_WIDTH) | tstr::BITS_16);
             bytes.extend_from_slice(&(value_len as u16).to_le_bytes());
-        } else if value_len < (1 << 32) {
+        } else if width == 4 {
             bytes.push((TAG_TSTR << TAG_WIDTH) | tstr::BITS_32);
             bytes.extend_from_slice(&(value_len as u32).to_le_bytes());
         } else {
@@ -446,15 +450,16 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
     fn pack_array(&mut self, bytes: &mut Vec<u8>, value: &[Value]) {
         let value_len = value.len();
 
-        if value_len <= array::INLINE as usize {
+        let width = payload_width(value_len as u64, array::INLINE);
+        if width == 0 {
             bytes.push((TAG_ARRAY << TAG_WIDTH) | (value_len as u8));
-        } else if value_len < (1 << 8) {
+        } else if width == 1 {
             bytes.push((TAG_ARRAY << TAG_WIDTH) | array::BITS_8);
             bytes.extend_from_slice(&(value_len as u8).to_le_bytes());
-        } else if value_len < (1 << 16) {
+        } else if width == 2 {
             bytes.push((TAG_ARRAY << TAG_WIDTH) | array::BITS_16);
             bytes.extend_from_slice(&(value_len as u16).to_le_bytes());
-        } else if value_len < (1 << 32) {
+        } else if width == 4 {
             bytes.push((TAG_ARRAY << TAG_WIDTH) | array::BITS_32);
             bytes.extend_from_slice(&(value_len as u32).to_le_bytes());
         } else {
@@ -470,15 +475,16 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
     fn pack_map(&mut self, bytes: &mut Vec<u8>, value: &BTreeMap<Arc<String>, Value>) {
         let value_len = value.len();
 
-        if value_len <= map::INLINE as usize {
+        let width = payload_width(value_len as u64, map::INLINE);
+        if width == 0 {
             bytes.push((TAG_MAP << TAG_WIDTH) | (value_len as u8));
-        } else if value_len < (1 << 8) {
+        } else if width == 1 {
             bytes.push((TAG_MAP << TAG_WIDTH) | map::BITS_8);
             bytes.extend_from_slice(&(value_len as u8).to_le_bytes());
-        } else if value_len < (1 << 16) {
+        } else if width == 2 {
             bytes.push((TAG_MAP << TAG_WIDTH) | map::BITS_16);
             bytes.extend_from_slice(&(value_len as u16).to_le_bytes());
-        } else if value_len < (1 << 32) {
+        } else if width == 4 {
             bytes.push((TAG_MAP << TAG_WIDTH) | map::BITS_32);
             bytes.extend_from_slice(&(value_len as u32).to_le_bytes());
         } else {
