@@ -12,7 +12,9 @@ const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const versions = args.filter(arg => arg !== '--dry-run');
 const version = versions[0];
-const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const parsedVersion = parseVersion(version);
+const channel = parsedVersion?.prerelease[0];
+const npmTag = !channel ? 'latest' : ['alpha', 'beta', 'rc'].includes(channel) ? channel : 'next';
 const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 let stage = 'preflight';
 let temporary;
@@ -33,10 +35,38 @@ function run(command, args, cwd = root, capture = false) {
   return result.stdout?.trim();
 }
 function check(condition, message) { if (!condition) throw new Error(message); }
+// SemVer precedence, without build metadata (unsupported by this release workflow).
+function parseVersion(value) {
+  if (typeof value !== 'string' || value.length > 256) return null;
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(value);
+  if (!match) return null;
+  const core = match.slice(1, 4).map(BigInt);
+  const prerelease = match[4]?.split('.') ?? [];
+  if (core.some(part => part > BigInt(Number.MAX_SAFE_INTEGER)) || prerelease.some(part => /^0\d+$/.test(part))) return null;
+  return { core, prerelease };
+}
 function compare(a, b) {
-  const left = a.split('.').map(BigInt), right = b.split('.').map(BigInt);
-  for (let i = 0; i < 3; i++) if (left[i] !== right[i]) return left[i] > right[i] ? 1 : -1;
+  const left = parseVersion(a), right = parseVersion(b);
+  for (let i = 0; i < 3; i++) if (left.core[i] !== right.core[i]) return left.core[i] > right.core[i] ? 1 : -1;
+  if (!left.prerelease.length || !right.prerelease.length) {
+    return Number(!left.prerelease.length) - Number(!right.prerelease.length);
+  }
+  for (let i = 0; i < Math.max(left.prerelease.length, right.prerelease.length); i++) {
+    const x = left.prerelease[i], y = right.prerelease[i];
+    if (x === y) continue;
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    const xNumeric = /^\d+$/.test(x), yNumeric = /^\d+$/.test(y);
+    if (xNumeric !== yNumeric) return xNumeric ? -1 : 1;
+    return (xNumeric ? BigInt(x) > BigInt(y) : x > y) ? 1 : -1;
+  }
   return 0;
+}
+async function ensureUnreleased(candidate) {
+  check(run('git', ['tag', '--list', `v${candidate}`], root, true) === '', `Local tag v${candidate} already exists`);
+  check(run('git', ['ls-remote', '--tags', 'origin', `refs/tags/v${candidate}`], root, true) === '', `Remote tag v${candidate} already exists`);
+  await absent(`https://crates.io/api/v1/crates/doxsync/${candidate}`, `crates.io doxsync ${candidate}`);
+  await absent(`${npmRegistry}doxsync/${candidate}`, `npm doxsync ${candidate}`);
 }
 async function absent(url, label) {
   const response = await fetch(url, { signal: AbortSignal.timeout(30000), headers: { 'User-Agent': 'doxsync-release (https://github.com/PeterlitsZo/doxsync)' } });
@@ -50,7 +80,7 @@ function replaceVersion(text, pattern, label) {
   check(count === 1, `Expected exactly one ${label} version`);
   return output;
 }
-function prepare(directory) {
+async function prepare(directory) {
   const cargoPath = join(directory, versionFiles[0]);
   const lockPath = join(directory, versionFiles[1]);
   const jsonPath = join(directory, versionFiles[2]);
@@ -58,8 +88,14 @@ function prepare(directory) {
   const manifest = JSON.parse(readFileSync(jsonPath, 'utf8'));
   const packageSection = cargo.match(/^\[package\]\s*\n([\s\S]*?)(?=^\[|$(?![\s\S]))/m)?.[1];
   const current = packageSection?.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
-  check(current && stable.test(current) && manifest.version === current, 'Rust and npm versions must match and be stable X.Y.Z versions');
-  check(compare(version, current) >= 0, 'Release version cannot go backwards');
+  const parsedCurrent = parseVersion(current);
+  check(parsedCurrent && manifest.version === current, 'Rust and npm versions must match and be valid X.Y.Z[-PRERELEASE] versions');
+  if (compare(version, current) < 0) {
+    // An unpublished stable placeholder can start its own prerelease series.
+    check(!parsedCurrent.prerelease.length && parsedVersion.prerelease.length &&
+      parsedVersion.core.every((part, i) => part === parsedCurrent.core[i]), 'Release version cannot go backwards');
+    await ensureUnreleased(current);
+  }
   check(/^name\s*=\s*"doxsync"/m.test(packageSection) && manifest.name === 'doxsync', 'Both packages must be named doxsync');
   check(manifest.license === 'MIT OR Apache-2.0' && /^license\s*=\s*"MIT OR Apache-2.0"/m.test(packageSection), 'Both packages must declare MIT OR Apache-2.0');
   for (const pkg of ['doxsync-rs', 'doxsync-js']) for (const license of ['LICENSE-MIT', 'LICENSE-APACHE']) {
@@ -111,16 +147,14 @@ function validate(directory) {
 }
 
 try {
-  check(versions.length === 1 && args.length === (dryRun ? 2 : 1) && stable.test(version), 'Usage: node scripts/release.mjs X.Y.Z [--dry-run]');
+  check(versions.length === 1 && args.length === (dryRun ? 2 : 1) && parsedVersion, 'Usage: node scripts/release.mjs X.Y.Z[-PRERELEASE] [--dry-run]');
   check(Number(process.versions.node.split('.')[0]) >= 22, 'Node.js 22+ is required');
   for (const tool of ['git', 'cargo', 'npm', 'wasm-pack']) run(tool, ['--version']);
   check(run('git', ['status', '--porcelain', '--untracked-files=all'], root, true) === '', 'Commit or stash all changes before releasing');
   branch = run('git', ['symbolic-ref', '--short', 'HEAD'], root, true);
   run('git', ['remote', 'get-url', 'origin'], root, true);
-  check(run('git', ['tag', '--list', `v${version}`], root, true) === '', `Local tag v${version} already exists`);
-  check(run('git', ['ls-remote', '--tags', 'origin', `refs/tags/v${version}`], root, true) === '', `Remote tag v${version} already exists`);
-  await absent(`https://crates.io/api/v1/crates/doxsync/${version}`, `crates.io doxsync ${version}`);
-  await absent(`${npmRegistry}doxsync/${version}`, `npm doxsync ${version}`);
+  await ensureUnreleased(version);
+  console.log(`Release v${version}; npm dist-tag: ${npmTag}`);
   let directory = root;
   if (dryRun) {
     temporary = mkdtempSync(join(tmpdir(), 'doxsync-release-'));
@@ -134,7 +168,7 @@ try {
     changed = true;
   }
   stage = 'version update and validation';
-  prepare(directory);
+  await prepare(directory);
   validate(directory);
   if (dryRun) {
     console.log(`Dry run passed for v${version}. No commit, tag, push or upload was performed.`);
@@ -153,7 +187,7 @@ try {
     stage = 'crates.io publish';
     run('cargo', ['publish', '--locked', '--registry', 'crates-io'], join(root, 'doxsync-rs'));
     stage = 'npm publish';
-    run('npm', ['publish', tarball, '--ignore-scripts', '--access', 'public', '--tag', 'latest', '--registry', npmRegistry]);
+    run('npm', ['publish', tarball, '--ignore-scripts', '--access', 'public', '--tag', npmTag, '--registry', npmRegistry]);
     console.log(`Released doxsync v${version} to crates.io and npm.`);
   }
 } catch (error) {
@@ -169,7 +203,7 @@ try {
     if (stage === 'release tag') console.error(`git tag -a ${quote(`v${version}`)} -m ${quote(`Release v${version}.`)}`);
     if (['release tag', 'Git push'].includes(stage)) console.error(`git push --atomic origin ${quote(`HEAD:refs/heads/${branch}`)} ${quote(`refs/tags/v${version}`)}`);
     if (stage !== 'npm publish') console.error('cargo publish --manifest-path doxsync-rs/Cargo.toml --locked --registry crates-io');
-    if (tarball) console.error(`npm publish ${quote(tarball)} --ignore-scripts --access public --tag latest --registry ${npmRegistry}`);
+    if (tarball) console.error(`npm publish ${quote(tarball)} --ignore-scripts --access public --tag ${quote(npmTag)} --registry ${npmRegistry}`);
     console.error('An upload timeout may still mean success. Check the registry version before retrying that upload.');
   }
   process.exitCode = 1;

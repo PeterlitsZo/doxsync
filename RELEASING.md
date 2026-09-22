@@ -28,15 +28,31 @@ and an attached branch. It does not edit or require `CHANGELOG.md`.
 From the repository root:
 
 ```sh
-node scripts/release.mjs 0.2.0 --dry-run
-node scripts/release.mjs 0.2.0
+node scripts/release.mjs 0.1.0-alpha.1 --dry-run
+node scripts/release.mjs 0.1.0-alpha.1
 ```
 
-Pass an explicit stable `X.Y.Z` version without a leading `v`. Prereleases and
-build metadata are not supported. Both package versions must already agree.
-The target cannot be older than the current version. The first release may use
-the existing `0.1.0` version; an empty release commit is allowed in that case.
+Pass an explicit `X.Y.Z` or `X.Y.Z-PRERELEASE` version without a leading `v`.
+Examples include `0.1.0-alpha.1`, `0.1.0-beta.2`, `0.1.0-rc.1`, and `0.1.0`.
+Build metadata (`+...`) is not supported. Both package versions must already agree.
+Versions follow [SemVer precedence](https://semver.org/spec/v2.0.0.html): numeric
+identifiers compare numerically, so `alpha.2 < alpha.10 < beta.1 < rc.1 <` the
+corresponding stable version. Numeric identifiers cannot have leading zeroes.
+
+The target cannot be older than the current version, with one exception: an
+unreleased stable placeholder such as `0.1.0` may become `0.1.0-alpha.1`. This is
+allowed only when the stable version has no local/remote release tag and is
+absent from both registries. This does not allow downgrading published versions
+or moving backward within a prerelease series. The first release may also use
+the existing version; an empty release commit is allowed in that case.
 Existing local/remote release tags or registry versions cause an error.
+
+Stable releases use npm's `latest` dist-tag. Prereleases whose first identifier
+is `alpha`, `beta`, or `rc` use that dist-tag; other prerelease identifiers use
+`next`. A prerelease never updates `latest`. The selected tag is printed before
+validation and is also used in recovery commands. Git commit messages and tags
+retain the complete version, for example `chore: Release v0.1.0-alpha.1.` and
+`v0.1.0-alpha.1`.
 
 The dry run checks remote tags and registry versions, but requires no registry
 publishing credentials. It uses a temporary copy of committed sources, updates
@@ -56,7 +72,7 @@ A real release follows these steps:
    is used. This also pushes any preceding local commits on the branch.
 5. Publish the Rust package to crates.io with locked dependencies.
 6. Publish the already validated npm tarball publicly to registry.npmjs.org
-   with the `latest` tag, without rebuilding it.
+   with the selected dist-tag, without rebuilding it.
 
 The tarball remains at `doxsync-js/doxsync-X.Y.Z.tgz`, which Git ignores.
 
