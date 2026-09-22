@@ -41,6 +41,7 @@ impl PackedMessageEncoder {
             internal.state_txn.rollback_to(savepoint);
             return Err(error);
         }
+        internal.state_txn.mark_protocol_sent();
         Ok(PackedMessage { inner: bytes })
     }
 }
@@ -86,6 +87,7 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
     }
 
     fn encode_metadata(&mut self, bytes: &mut Vec<u8>) -> Result<()> {
+        let protocol = self.state_txn.pending_protocol();
         let mut preparation = PoolPreparation::new(self.state_txn, self.actions_limit);
         for action in self.actions {
             preparation.append(action)?;
@@ -96,8 +98,15 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
 
         self.pack_varuint(
             bytes,
-            u64::from(!string_patch.is_empty()) + u64::from(!path_patch.is_empty()),
+            u64::from(protocol.is_some())
+                + u64::from(!string_patch.is_empty())
+                + u64::from(!path_patch.is_empty()),
         );
+
+        if let Some(version) = protocol {
+            self.pack_varuint(bytes, METADATA_PROTOCOL);
+            self.pack_varuint(bytes, u64::from(version));
+        }
 
         if !string_patch.is_empty() {
             self.pack_varuint(bytes, METADATA_STRINGS);

@@ -73,5 +73,9 @@ pub(crate) mod map {
     pub(crate) const BITS_64: u8 = 15;
 }
 
+/// Protocol versions implemented by this build.
+pub(crate) const SUPPORTED_PROTOCOLS: &[u32] = &[1];
+
+pub(crate) const METADATA_PROTOCOL: u64 = 2;
 pub(crate) const METADATA_STRINGS: u64 = 0;
 pub(crate) const METADATA_PATHS: u64 = 1;

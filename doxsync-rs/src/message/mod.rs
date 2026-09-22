@@ -97,7 +97,7 @@ mod tests {
         }]);
 
         let packed = message.encode(&mut producer_state_txn).unwrap();
-        assert_eq!(packed.bytes(), hex_to_bytes("00 01 00 0c 2a"));
+        assert_eq!(packed.bytes(), hex_to_bytes("01 02 01 01 00 0c 2a"));
 
         let unpacked = Message::decode(packed, &mut consumer_state_txn).unwrap();
         assert_eq!(

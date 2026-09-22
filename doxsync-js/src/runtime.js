@@ -29,9 +29,9 @@ function requireInitialized() {
 export class Producer {
   #handle;
 
-  constructor(value) {
+  constructor(value, protocols) {
     requireInitialized();
-    this.#handle = new WasmProducer(value);
+    this.#handle = new WasmProducer(value, protocols);
   }
 
   #live() {

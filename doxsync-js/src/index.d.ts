@@ -31,12 +31,17 @@ export function init(source?: InitSource): Promise<void>;
 
 export class Producer {
   #private;
-  /** Copies the value into WASM. */
-  constructor(value: SyncValue);
+  /**
+   * Copies the value into WASM and selects the highest common protocol version.
+   * protocols lists the consumer's supported versions as u32 integers.
+   * Currently only 1 is supported. Missing, invalid, empty, or incompatible
+   * lists throw InvalidData errors. Order and duplicates do not matter.
+   */
+  constructor(value: SyncValue, protocols: readonly number[]);
   /** Replaces the document after validating and copying the entire value. */
   replace(value: SyncValue): void;
   /**
-   * Returns a snapshot on the first call, then changes since the last message.
+   * Returns a snapshot with protocol metadata on the first call, then changes.
    * Returns undefined if unchanged. Retain each message until delivered in order.
    */
   produceDiff(): Uint8Array | undefined;
@@ -47,7 +52,10 @@ export class Producer {
 export class Consumer {
   #private;
   constructor();
-  /** Applies one complete message; failures leave the document and pools intact. */
+  /**
+   * Applies one complete message. The first message must declare protocol 1.
+   * Failures leave the document, pools, and protocol state intact.
+   */
   consumeDiff(bytes: Uint8Array): void;
   /** Returns an independent copy, or undefined before the first snapshot. */
   document(): SyncValue | undefined;

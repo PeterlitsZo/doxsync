@@ -11,7 +11,7 @@ use crate::{
 };
 
 use super::{
-    consts::{METADATA_PATHS, METADATA_STRINGS},
+    consts::{METADATA_PATHS, METADATA_PROTOCOL, METADATA_STRINGS},
     layout::{path_definition_len, varuint_len},
     visit_strings,
 };
@@ -231,9 +231,15 @@ impl<'s> PoolPreparation<'s> {
     }
 
     pub(crate) fn metadata_len(&self) -> usize {
+        let protocol = self.txn.pending_protocol();
         let mut len = varuint_len(
-            u64::from(!self.patches.strings.is_empty()) + u64::from(!self.patches.paths.is_empty()),
+            u64::from(protocol.is_some())
+                + u64::from(!self.patches.strings.is_empty())
+                + u64::from(!self.patches.paths.is_empty()),
         );
+        if let Some(version) = protocol {
+            len += varuint_len(METADATA_PROTOCOL) + varuint_len(u64::from(version));
+        }
         if !self.patches.strings.is_empty() {
             len += varuint_len(METADATA_STRINGS)
                 + varuint_len(self.patches.strings.len() as u64)

@@ -7,6 +7,7 @@ use super::ConsumerState;
 /// Owns consumer pools until explicitly committed or rolled back.
 #[must_use]
 pub(crate) struct ConsumerStateTxn {
+    protocol: Option<u32>,
     string_pool: BTreeMap<u32, Arc<String>>,
     path_pool: BTreeMap<u32, Arc<Path>>,
     rollback_log: Vec<ConsumerStateRollbackEntry>,
@@ -22,14 +23,26 @@ pub(crate) struct ConsumerStateSavepoint {
 impl ConsumerStateTxn {
     pub(super) fn new(state: ConsumerState) -> Self {
         let ConsumerState {
+            protocol,
             string_pool,
             path_pool,
         } = state;
         Self {
+            protocol,
             string_pool,
             path_pool,
             rollback_log: Vec::new(),
         }
+    }
+
+    pub(crate) fn protocol(&self) -> Option<u32> {
+        self.protocol
+    }
+
+    pub(crate) fn set_protocol(&mut self, version: u32) {
+        let previous = self.protocol.replace(version);
+        self.rollback_log
+            .push(ConsumerStateRollbackEntry::ProtocolSet { previous });
     }
 
     pub(crate) fn get_string(&self, key: u32) -> Option<&Arc<String>> {
@@ -79,11 +92,13 @@ impl ConsumerStateTxn {
 
     pub(crate) fn commit(self) -> ConsumerState {
         let Self {
+            protocol,
             string_pool,
             path_pool,
             rollback_log: _,
         } = self;
         ConsumerState {
+            protocol,
             string_pool,
             path_pool,
         }
@@ -98,6 +113,9 @@ impl ConsumerStateTxn {
 }
 
 enum ConsumerStateRollbackEntry {
+    ProtocolSet {
+        previous: Option<u32>,
+    },
     StringPoolSet {
         key: u32,
         previous: Option<Arc<String>>,
@@ -111,6 +129,7 @@ enum ConsumerStateRollbackEntry {
 impl ConsumerStateRollbackEntry {
     fn undo(self, txn: &mut ConsumerStateTxn) {
         match self {
+            Self::ProtocolSet { previous } => txn.protocol = previous,
             Self::StringPoolSet { key, previous } => match previous {
                 Some(value) => {
                     txn.string_pool.insert(key, value);

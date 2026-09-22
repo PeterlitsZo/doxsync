@@ -40,7 +40,7 @@ After installing the package from the local tarball:
 import { init, Producer, Consumer } from "doxsync-js";
 
 await init();
-const producer = new Producer({ count: 1n, ratio: 0.5 });
+const producer = new Producer({ count: 1n, ratio: 0.5 }, [1]);
 const consumer = new Consumer();
 
 try {
@@ -154,3 +154,22 @@ try {
 The JS package exposes only `init`, `Producer`, and `Consumer` at runtime.
 Rust's lower-level Document, Value, and Message APIs remain internal to this
 binding, and the wire protocol is shared with native Rust.
+
+### Protocol negotiation
+
+The second `Producer` constructor argument is required: pass an array of protocol
+versions supported by the consumer, such as `[1]`. Versions must be integers in
+`[0, 2^32 - 1]`. The producer selects the highest version supported by both peers;
+order and duplicates do not matter. Currently only version `1` is implemented.
+Empty or incompatible lists, omitted arguments, and invalid values throw an error
+with `kind: "InvalidData"`.
+
+The first packed message starts its metadata with protocol instruction `2` followed
+by the selected version, currently `1`; both are unsigned variable-length integers.
+Later messages omit this declaration and retain the same protocol for the stream.
+The consumer rejects first messages without a leading protocol declaration,
+unsupported versions, and repeated declarations. Legacy messages without version
+metadata are no longer accepted. Both peers must be upgraded together.
+
+Failed encoding or consumption preserves protocol initialization state as well as
+pool state, allowing retries. Keep and deliver packed messages in order as usual.

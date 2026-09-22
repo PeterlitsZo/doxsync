@@ -6,6 +6,7 @@ use super::ConsumerStateTxn;
 
 #[derive(Default)]
 pub(crate) struct ConsumerState {
+    pub(super) protocol: Option<u32>,
     pub(super) path_pool: BTreeMap<u32, Arc<Path>>,
     pub(super) string_pool: BTreeMap<u32, Arc<String>>,
 }

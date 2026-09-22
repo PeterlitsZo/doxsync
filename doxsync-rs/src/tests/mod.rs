@@ -35,7 +35,7 @@ fn assert_message(
 #[test]
 fn test_produce_then_consume_001() {
     let initial_docuemnt = Document::new(value!(42).unwrap());
-    let mut producer = Producer::new(initial_docuemnt.clone());
+    let mut producer = Producer::new(initial_docuemnt.clone(), &[1]).unwrap();
     let mut consumer = Consumer::new();
 
     // Produce the first diff message.
@@ -96,7 +96,7 @@ fn test_produce_then_consume_002() {
         })
         .unwrap(),
     );
-    let mut producer = Producer::new(document.clone());
+    let mut producer = Producer::new(document.clone(), &[1]).unwrap();
     let mut consumer = Consumer::new();
     assert_message(
         &mut producer,
@@ -296,7 +296,7 @@ fn test_produce_then_consume_003() {
         })
         .unwrap(),
     );
-    let mut producer = Producer::new(document.clone());
+    let mut producer = Producer::new(document.clone(), &[1]).unwrap();
     let mut consumer = Consumer::new();
     assert_message(
         &mut producer,

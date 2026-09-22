@@ -1,5 +1,6 @@
 use crate::patch::Action;
-use crate::{Document, Message, PackedMessage, ProducerState, Result};
+use crate::protocol::consts::SUPPORTED_PROTOCOLS;
+use crate::{Document, Error, ErrorKind, Message, PackedMessage, ProducerState, Result};
 
 mod cost;
 mod differ;
@@ -13,12 +14,22 @@ pub struct Producer {
 }
 
 impl Producer {
-    pub fn new(current_document: Document) -> Self {
-        Self {
-            state: Some(ProducerState::new()),
+    /// Selects the highest protocol version supported by both peers.
+    /// Empty lists and lists without a common version return `InvalidData`.
+    pub fn new(current_document: Document, protocols: &[u32]) -> Result<Self> {
+        let protocol = SUPPORTED_PROTOCOLS
+            .iter()
+            .copied()
+            .filter(|version| protocols.contains(version))
+            .max()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "no common protocol version"))?;
+        let mut state = ProducerState::new();
+        state.pending_protocol = Some(protocol);
+        Ok(Self {
+            state: Some(state),
             current_document,
             last_emited_document: None,
-        }
+        })
     }
 
     pub fn replace(&mut self, new_document: Document) {
@@ -27,6 +38,7 @@ impl Producer {
 
     /// Packs a message.
     ///
+    /// The first successfully packed message declares the selected protocol.
     /// Internal state will be updated on success
     pub fn pack_diff(&mut self, diff: Message) -> Result<PackedMessage> {
         let mut txn = self.state.take().expect("producer state").txn();

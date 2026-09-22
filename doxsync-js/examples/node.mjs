@@ -1,7 +1,7 @@
 import { init, Producer, Consumer } from "doxsync-js";
 
 await init();
-const producer = new Producer({ count: 1n, data: new Uint8Array([1, 2, 3]) });
+const producer = new Producer({ count: 1n, data: new Uint8Array([1, 2, 3]) }, [1]);
 const consumer = new Consumer();
 
 try {

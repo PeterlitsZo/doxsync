@@ -293,7 +293,7 @@ function reset() {
   dispose();
   const document = initialDocument();
   state = {
-    document, producer: new bindings.Producer(document), consumer: new bindings.Consumer(),
+    document, producer: new bindings.Producer(document, [1]), consumer: new bindings.Consumer(),
     producerText: format(document), consumerText: "", queue: [], history: [],
     selected: undefined, sent: 0, totalBytes: 0, unchanged: 0,
     running: true, failed: false,

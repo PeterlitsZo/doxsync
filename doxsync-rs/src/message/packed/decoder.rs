@@ -49,11 +49,24 @@ impl PackedMessageDecoder {
         // Unpack the metadata's length.
         let metadata_len = Self::unpack_varuint(&mut bytes)?;
 
+        if state.protocol().is_none() && metadata_len == 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "missing protocol metadata",
+            ));
+        }
+
         // Unpack and apply the metadata instructions.
         let mut seen = BTreeSet::new();
         for index in 0..metadata_len {
             let instruction = Self::unpack_varuint(&mut bytes)
                 .map_err(|e| e.with_context("unpack metadata instruction"))?;
+            if state.protocol().is_none() && instruction != METADATA_PROTOCOL {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "protocol must be the first metadata instruction",
+                ));
+            }
             if !seen.insert(instruction) {
                 return Err(
                     Error::new(ErrorKind::InvalidData, "duplicate metadata instruction")
@@ -61,6 +74,24 @@ impl PackedMessageDecoder {
                 );
             }
             match instruction {
+                METADATA_PROTOCOL => {
+                    if state.protocol().is_some() {
+                        return Err(Error::new(
+                            ErrorKind::InvalidData,
+                            "protocol already declared",
+                        ));
+                    }
+                    let version = Self::unpack_varuint(&mut bytes)
+                        .map_err(|e| e.with_context("unpack protocol version"))?;
+                    let version = u32::try_from(version)
+                        .ok()
+                        .filter(|version| SUPPORTED_PROTOCOLS.contains(version))
+                        .ok_or_else(|| {
+                            Error::new(ErrorKind::InvalidData, "unsupported protocol version")
+                                .with_metadata("version", version)
+                        })?;
+                    state.set_protocol(version);
+                }
                 METADATA_STRINGS => {
                     let patch = Self::unpack_string_pool_patch(&mut bytes)
                         .map_err(|e| e.with_context("unpack string pool patch"))?;

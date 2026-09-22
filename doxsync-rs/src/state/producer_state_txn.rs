@@ -30,6 +30,7 @@ pub(crate) struct ProducerStateSavepoint {
 }
 
 pub(crate) struct ProducerStateTxn {
+    pending_protocol: Option<u32>,
     pub(super) path_pool: BTreeMap<u32, Arc<Path>>,
     pub(super) path_pool_bitmap: Bitmap,
     pub(super) path_pool_reverse: BTreeMap<Arc<Path>, u32>,
@@ -45,6 +46,7 @@ pub(crate) struct ProducerStateTxn {
 impl ProducerStateTxn {
     pub(super) fn new(state: ProducerState) -> Self {
         let ProducerState {
+            pending_protocol,
             path_pool,
             path_pool_bitmap,
             path_pool_reverse,
@@ -56,6 +58,7 @@ impl ProducerStateTxn {
         } = state;
 
         Self {
+            pending_protocol,
             path_pool,
             path_pool_bitmap,
             path_pool_reverse,
@@ -70,6 +73,7 @@ impl ProducerStateTxn {
 
     pub(crate) fn commit(self) -> ProducerState {
         let Self {
+            pending_protocol,
             path_pool,
             path_pool_bitmap,
             path_pool_reverse,
@@ -82,6 +86,7 @@ impl ProducerStateTxn {
         } = self;
 
         ProducerState {
+            pending_protocol,
             path_pool,
             path_pool_bitmap,
             path_pool_reverse,
@@ -97,6 +102,7 @@ impl ProducerStateTxn {
         self.rollback_all();
 
         let Self {
+            pending_protocol,
             path_pool,
             path_pool_bitmap,
             path_pool_reverse,
@@ -109,6 +115,7 @@ impl ProducerStateTxn {
         } = self;
 
         ProducerState {
+            pending_protocol,
             path_pool,
             path_pool_bitmap,
             path_pool_reverse,
@@ -146,6 +153,17 @@ impl ProducerStateTxn {
             rollback_log_len: self.rollback_log.len(),
             string_pool_lru: self.string_pool_lru.savepoint(),
             path_pool_lru: self.path_pool_lru.savepoint(),
+        }
+    }
+
+    pub(crate) fn pending_protocol(&self) -> Option<u32> {
+        self.pending_protocol
+    }
+
+    pub(crate) fn mark_protocol_sent(&mut self) {
+        if let Some(version) = self.pending_protocol.take() {
+            self.rollback_log
+                .push(StateRollbackEntry::ProtocolPending { version });
         }
     }
 
@@ -279,6 +297,7 @@ impl ProducerStateTxn {
 }
 
 pub(super) enum StateRollbackEntry {
+    ProtocolPending { version: u32 },
     PathPoolInsert { key: u32, value: Arc<Path> },
     PathPoolRemove { key: u32 },
     StringPoolInsert { key: u32, value: Arc<String> },
@@ -288,6 +307,7 @@ pub(super) enum StateRollbackEntry {
 impl StateRollbackEntry {
     fn undo(self, txn: &mut ProducerStateTxn) {
         match self {
+            Self::ProtocolPending { version } => txn.pending_protocol = Some(version),
             Self::StringPoolInsert { key, value } => {
                 txn.string_pool_bitmap.alloc_at(key as usize);
                 txn.string_pool.insert(key, value.clone());

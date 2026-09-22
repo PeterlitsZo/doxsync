@@ -1,6 +1,6 @@
 //! JS bindings only; synchronization and protocol state live in the core types.
 
-use js_sys::{Reflect, Uint8Array};
+use js_sys::{Array, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 use crate::{Document, Error, ErrorKind, PackedMessage};
@@ -35,10 +35,28 @@ pub struct Producer {
 #[wasm_bindgen]
 impl Producer {
     #[wasm_bindgen(constructor)]
-    pub fn new(value: JsValue) -> Result<Producer, JsValue> {
+    pub fn new(value: JsValue, protocols: JsValue) -> Result<Producer, JsValue> {
+        if !Array::is_array(&protocols) {
+            return Err(invalid("protocols must be an array of u32 integers"));
+        }
+        let protocols = Array::from(&protocols)
+            .iter()
+            .map(|value| {
+                value
+                    .as_f64()
+                    .filter(|value| {
+                        value.is_finite()
+                            && value.fract() == 0.0
+                            && *value >= 0.0
+                            && *value <= u32::MAX as f64
+                    })
+                    .map(|value| value as u32)
+                    .ok_or_else(|| invalid("protocol versions must be u32 integers"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let document = Document::new(value::from_js(&value)?);
         Ok(Self {
-            inner: crate::Producer::new(document),
+            inner: crate::Producer::new(document, &protocols).map_err(js_error)?,
         })
     }
 
