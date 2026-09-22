@@ -37,7 +37,7 @@ also generate the JS glue required to load it.
 After installing the package from the local tarball:
 
 ```js
-import { init, Producer, Consumer } from "doxsync-js";
+import { init, Producer, Consumer } from "doxsync";
 
 await init();
 const producer = new Producer({ count: 1n, ratio: 0.5 }, [1]);
@@ -91,7 +91,7 @@ can be retried.
   Node.js additionally reads `file:` URLs from disk.
 - Bundlers must deploy the WASM asset. If their asset handling changes its
   location, pass the deployed URL or bytes explicitly; the package exports
-  the asset as `doxsync-js/doxsync.wasm` for resolution by build tools.
+  the asset as `doxsync/doxsync.wasm` for resolution by build tools.
 
 For a browser example, serve this directory and open `/examples/browser.html`:
 
