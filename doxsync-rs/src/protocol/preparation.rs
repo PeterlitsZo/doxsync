@@ -12,7 +12,7 @@ use crate::{
 
 use super::{
     consts::{METADATA_PATHS, METADATA_PROTOCOL, METADATA_STRINGS},
-    layout::{path_definition_len, varuint_len},
+    layout::{path_definition_len, path_key_ref_key, varuint_len},
     visit_strings,
 };
 
@@ -20,7 +20,14 @@ use super::{
 #[derive(Default)]
 pub(crate) struct PreparedPools {
     pub(crate) strings: Vec<(u32, Arc<String>)>,
-    pub(crate) paths: Vec<(u32, Arc<Path>)>,
+    pub(crate) paths: Vec<(u32, Vec<PreparedPathSegment>)>,
+}
+
+/// Frozen wire choices keep encoding consistent with incremental cost estimates.
+pub(crate) enum PreparedPathSegment {
+    Key(Arc<String>),
+    KeyRef(u32),
+    Index(usize),
 }
 
 #[derive(Clone, Copy)]
@@ -140,7 +147,7 @@ impl<'s> PoolPreparation<'s> {
         if self.string_seen.contains(string) {
             return Ok(());
         }
-        // Keep prepared strings resident so body references and incremental costs
+        // Keep prepared strings resident so body/path references and incremental costs
         // stay valid. Additional distinct strings are encoded inline without
         // changing the pool.
         if self.strings.len() >= STRING_POOL_CAPACITY {
@@ -179,7 +186,23 @@ impl<'s> PoolPreparation<'s> {
         self.paths.push(path.clone());
         self.txn.hit_path_pool_if_exists(&path);
         if self.txn.get_path_key(&path).is_none() {
-            let len = path_definition_len(&path);
+            let mut definition = Vec::with_capacity(path.segments().len());
+            for segment in path.segments() {
+                definition.push(match segment {
+                    PathSegment::Key(string) => {
+                        match path_key_ref_key(string.len(), self.txn.get_string_key(string)) {
+                            Some(key) => {
+                                // Touch and protect an existing entry without admitting misses.
+                                self.prepare_string(string)?;
+                                PreparedPathSegment::KeyRef(key)
+                            }
+                            None => PreparedPathSegment::Key(string.clone()),
+                        }
+                    }
+                    PathSegment::Index(index) => PreparedPathSegment::Index(*index),
+                });
+            }
+            let len = path_definition_len(&definition);
             // Count actual definitions, including initial hits evicted before their first use.
             self.path_definition_bytes = self
                 .path_definition_bytes
@@ -191,7 +214,7 @@ impl<'s> PoolPreparation<'s> {
             match self.txn.insert_path_pool(&path) {
                 InsertPathResult::Inserted { key } | InsertPathResult::Replaced { key } => {
                     self.path_patch_bytes += varuint_len(key as u64) + len;
-                    self.patches.paths.push((key, path));
+                    self.patches.paths.push((key, definition));
                 }
                 InsertPathResult::Existing { .. } => unreachable!("new path"),
             }

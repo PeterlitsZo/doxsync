@@ -173,3 +173,21 @@ metadata are no longer accepted. Both peers must be upgraded together.
 
 Failed encoding or consumption preserves protocol initialization state as well as
 pool state, allowing retries. Keep and deliver packed messages in order as usual.
+
+### Path key encoding
+
+Protocol v1 path definitions use the low two bits of each segment's unsigned
+variable-length integer as a tag: `0b00` carries a UTF-8 byte length followed by
+the key bytes, `0b01` carries an array index, and `0b10` carries a string pool
+index. The payload is shifted left by two bits before adding the tag; `0b11`
+is reserved and rejected.
+
+A cached key uses `0b10` only when its reference is strictly shorter than its
+literal encoding. Uncached keys remain inline without adding string pool entries.
+The initial snapshot populates the string pool, so subsequent path definitions
+can reuse those keys. Once a whole path is cached, actions reuse its path pool ID.
+String pool updates precede path definitions; referenced strings stay resident
+through message encoding and are resolved when the consumer reads the definition.
+
+This extends v1 directly. Both peers must be upgraded together: older decoders
+reject the new `0b10` path segment tag.

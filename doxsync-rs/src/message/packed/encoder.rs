@@ -2,9 +2,9 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use super::PackedMessage;
 use crate::message::Message;
-use crate::patch::{Action, Path, PathSegment};
+use crate::patch::{Action, Path};
 use crate::protocol::{
-    PoolPreparation,
+    PoolPreparation, PreparedPathSegment,
     consts::*,
     layout::{action_tag, payload_width, tstr_ref_key},
 };
@@ -367,15 +367,18 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
         }
     }
 
-    fn pack_path(&mut self, bytes: &mut Vec<u8>, path: &Path) {
-        self.pack_varuint(bytes, path.segments().len() as u64);
-        for segment in path.segments() {
+    fn pack_path(&mut self, bytes: &mut Vec<u8>, path: &[PreparedPathSegment]) {
+        self.pack_varuint(bytes, path.len() as u64);
+        for segment in path {
             match segment {
-                PathSegment::Key(key) => {
+                PreparedPathSegment::Key(key) => {
                     self.pack_varuint(bytes, (key.len() as u64) << 2 | 0b00);
                     bytes.extend_from_slice(key.as_bytes());
                 }
-                PathSegment::Index(index) => {
+                PreparedPathSegment::KeyRef(key) => {
+                    self.pack_varuint(bytes, (*key as u64) << 2 | 0b10);
+                }
+                PreparedPathSegment::Index(index) => {
                     self.pack_varuint(bytes, (*index as u64) << 2 | 0b01);
                 }
             }

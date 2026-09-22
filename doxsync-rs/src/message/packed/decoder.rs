@@ -98,7 +98,7 @@ impl PackedMessageDecoder {
                     state.apply_string_pool_patch(patch);
                 }
                 METADATA_PATHS => {
-                    let patch = Self::unpack_path_pool_patch(&mut bytes).map_err(|e| {
+                    let patch = Self::unpack_path_pool_patch(&mut bytes, state).map_err(|e| {
                         e.with_context("unpack path pool patch")
                             .with_metadata("metadata_index", index)
                     })?;
@@ -191,7 +191,10 @@ impl PackedMessageDecoder {
         Ok(patch)
     }
 
-    fn unpack_path_pool_patch(bytes: &mut &[u8]) -> Result<Vec<(u32, Arc<Path>)>> {
+    fn unpack_path_pool_patch(
+        bytes: &mut &[u8],
+        state: &ConsumerStateTxn,
+    ) -> Result<Vec<(u32, Arc<Path>)>> {
         let count = Self::unpack_varuint(bytes)?;
         if count > PATH_POOL_CAPACITY as u64 {
             return Err(Error::new(
@@ -216,7 +219,7 @@ impl PackedMessageDecoder {
             // Restrict the input before parsing so oversized definitions cannot allocate first.
             let mut limited = &bytes[..bytes.len().min(remaining)];
             let before = limited.len();
-            let path = Self::unpack_path(&mut limited).map_err(|e| {
+            let path = Self::unpack_path(&mut limited, state).map_err(|e| {
                 e.with_metadata("entry_index", index)
                     .with_metadata("path_id", id)
             })?;
@@ -307,7 +310,7 @@ impl PackedMessageDecoder {
         }
     }
 
-    fn unpack_path(bytes: &mut &[u8]) -> Result<Path> {
+    fn unpack_path(bytes: &mut &[u8], state: &ConsumerStateTxn) -> Result<Path> {
         fn unexpected_end_of_path() -> Error {
             Error::new(ErrorKind::InvalidData, "unexpected end of path")
         }
@@ -351,6 +354,25 @@ impl PackedMessageDecoder {
                             .with_metadata("index", index)
                     })?;
                     segments.push(PathSegment::index(item_index));
+                }
+                0b10 => {
+                    if segment_value >= STRING_POOL_CAPACITY as u64 {
+                        return Err(Error::new(
+                            ErrorKind::InvalidData,
+                            "path string id out of range",
+                        )
+                        .with_metadata("index", index)
+                        .with_metadata("string_id", segment_value));
+                    }
+                    let key = state.get_string(segment_value as u32).ok_or_else(|| {
+                        Error::new(ErrorKind::InvalidData, "path key not found in string pool")
+                            .with_metadata("index", index)
+                            .with_metadata("string_id", segment_value)
+                    })?;
+                    key_bytes_remaining = key_bytes_remaining
+                        .checked_sub(key.len())
+                        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "path keys too large"))?;
+                    segments.push(PathSegment::key_arc(key.clone()));
                 }
                 _ => {
                     return Err(

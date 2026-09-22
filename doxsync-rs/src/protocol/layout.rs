@@ -52,19 +52,25 @@ pub(crate) fn tstr_encoded_len(value_len: usize, key: Option<u32>) -> usize {
     }
 }
 
-/// Requires a path validated by pool preparation.
-pub(crate) fn path_definition_len(path: &crate::patch::Path) -> usize {
-    use crate::patch::PathSegment;
+/// Requires segments validated and frozen by pool preparation.
+pub(crate) fn path_definition_len(path: &[super::PreparedPathSegment]) -> usize {
+    use super::PreparedPathSegment;
 
-    varuint_len(path.segments().len() as u64)
+    varuint_len(path.len() as u64)
         + path
-            .segments()
             .iter()
             .map(|segment| match segment {
-                PathSegment::Key(key) => varuint_len((key.len() as u64) << 2 | 0b00) + key.len(),
-                PathSegment::Index(index) => varuint_len((*index as u64) << 2 | 0b01),
+                PreparedPathSegment::Key(key) => varuint_len((key.len() as u64) << 2) + key.len(),
+                PreparedPathSegment::KeyRef(key) => varuint_len((*key as u64) << 2 | 0b10),
+                PreparedPathSegment::Index(index) => varuint_len((*index as u64) << 2 | 0b01),
             })
             .sum::<usize>()
+}
+
+/// Use a path key reference only when it is strictly shorter than the literal.
+pub(crate) fn path_key_ref_key(value_len: usize, key: Option<u32>) -> Option<u32> {
+    let literal_len = varuint_len((value_len as u64) << 2) + value_len;
+    key.filter(|key| varuint_len((*key as u64) << 2 | 0b10) < literal_len)
 }
 
 pub(crate) fn action_tag(action: &crate::patch::Action) -> u64 {

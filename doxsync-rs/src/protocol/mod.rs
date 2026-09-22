@@ -4,7 +4,7 @@ pub(crate) mod consts;
 pub(crate) mod layout;
 mod preparation;
 
-pub(crate) use preparation::{PoolPreparation, PoolSavepoint};
+pub(crate) use preparation::{PoolPreparation, PoolSavepoint, PreparedPathSegment};
 
 use std::sync::Arc;
 
