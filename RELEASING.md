@@ -1,6 +1,6 @@
 # Releasing doxsync
 
-The Rust crate and npm package are both named `doxsync` and share one release
+The Rust crate `doxsync` and npm package `@doxsync/core` share one release
 version. Both are available under `MIT OR Apache-2.0`.
 
 ## Prerequisites
@@ -14,7 +14,8 @@ cargo login
 npm login --registry https://registry.npmjs.org/
 ```
 
-Use accounts authorized to publish `doxsync` on each registry, and ensure you can
+Use accounts authorized to publish `doxsync` on crates.io and `@doxsync/core`
+under the npm `doxsync` organization, and ensure you can
 push the current branch and tags to `origin`. Existing CLI credential providers
 and environment configuration are used; the script does not store credentials.
 Any npm authentication or two-factor prompts are handled by npm itself.
@@ -74,7 +75,7 @@ A real release follows these steps:
 6. Publish the already validated npm tarball publicly to registry.npmjs.org
    with the selected dist-tag, without rebuilding it.
 
-The tarball remains at `doxsync-js/doxsync-X.Y.Z.tgz`, which Git ignores.
+The tarball remains at `doxsync-js/doxsync-core-X.Y.Z.tgz`, which Git ignores.
 
 ## Failures and recovery
 
@@ -93,3 +94,20 @@ change the version to finish the same release.
 An upload timeout can occur after a registry accepted the package. Check the
 version on the relevant registry before retrying an uncertain upload. Published
 versions are not automatically removed, and commits/tags are not reset or deleted.
+
+## Completing the initial npm publish after the package rename
+
+The Rust `0.1.0-alpha.1` release is already published. To finish its npm release
+under `@doxsync/core`, rebuild the renamed package and publish only that tarball
+from the repository root:
+
+```sh
+(cd doxsync-js && npm pack)
+npm publish ./doxsync-js/doxsync-core-0.1.0-alpha.1.tgz \
+  --ignore-scripts --access public --tag alpha \
+  --registry https://registry.npmjs.org/
+```
+
+The old `doxsync-0.1.0-alpha.1.tgz` still contains the rejected unscoped name;
+do not reuse it. Keep the existing Rust release and Git release tag unchanged.
+Future versions use the unified release script normally.

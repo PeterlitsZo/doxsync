@@ -1,5 +1,5 @@
 {
-  "name": "doxsync",
+  "name": "@doxsync/core",
   "version": "0.1.0-alpha.1",
   "description": "JavaScript bindings for the doxsync Rust synchronization engine",
   "type": "module",

@@ -1,4 +1,4 @@
-import { init, Producer, Consumer } from "doxsync";
+import { init, Producer, Consumer } from "@doxsync/core";
 
 await init();
 const producer = new Producer({ count: 1n, data: new Uint8Array([1, 2, 3]) }, [1]);

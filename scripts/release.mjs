@@ -6,6 +6,7 @@ import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const npmName = '@doxsync/core';
 const npmRegistry = 'https://registry.npmjs.org/';
 const versionFiles = ['doxsync-rs/Cargo.toml', 'doxsync-rs/Cargo.lock', 'doxsync-js/package.json'];
 const args = process.argv.slice(2);
@@ -66,7 +67,7 @@ async function ensureUnreleased(candidate) {
   check(run('git', ['tag', '--list', `v${candidate}`], root, true) === '', `Local tag v${candidate} already exists`);
   check(run('git', ['ls-remote', '--tags', 'origin', `refs/tags/v${candidate}`], root, true) === '', `Remote tag v${candidate} already exists`);
   await absent(`https://crates.io/api/v1/crates/doxsync/${candidate}`, `crates.io doxsync ${candidate}`);
-  await absent(`${npmRegistry}doxsync/${candidate}`, `npm doxsync ${candidate}`);
+  await absent(`${npmRegistry}${encodeURIComponent(npmName)}/${candidate}`, `npm ${npmName} ${candidate}`);
 }
 async function absent(url, label) {
   const response = await fetch(url, { signal: AbortSignal.timeout(30000), headers: { 'User-Agent': 'doxsync-release (https://github.com/PeterlitsZo/doxsync)' } });
@@ -96,7 +97,7 @@ async function prepare(directory) {
       parsedVersion.core.every((part, i) => part === parsedCurrent.core[i]), 'Release version cannot go backwards');
     await ensureUnreleased(current);
   }
-  check(/^name\s*=\s*"doxsync"/m.test(packageSection) && manifest.name === 'doxsync', 'Both packages must be named doxsync');
+  check(/^name\s*=\s*"doxsync"/m.test(packageSection) && manifest.name === npmName, `Rust package must be doxsync and npm package must be ${npmName}`);
   check(manifest.license === 'MIT OR Apache-2.0' && /^license\s*=\s*"MIT OR Apache-2.0"/m.test(packageSection), 'Both packages must declare MIT OR Apache-2.0');
   for (const pkg of ['doxsync-rs', 'doxsync-js']) for (const license of ['LICENSE-MIT', 'LICENSE-APACHE']) {
     check(existsSync(join(directory, pkg, license)), `Missing ${pkg}/${license}`);
@@ -118,7 +119,7 @@ function validate(directory) {
   run('npm', ['run', 'build'], js);
   run('node', ['examples/node.mjs'], js);
   const info = JSON.parse(run('npm', ['pack', '--ignore-scripts', '--json'], js, true));
-  check(info.length === 1 && info[0].name === 'doxsync' && info[0].version === version, 'Unexpected npm package identity');
+  check(info.length === 1 && info[0].name === npmName && info[0].version === version, 'Unexpected npm package identity');
   const files = new Set(info[0].files.map(file => file.path));
   for (const file of ['dist/index.js', 'dist/node.js', 'dist/runtime.js', 'dist/index.d.ts', 'dist/wasm/doxsync.js', 'dist/wasm/doxsync_bg.wasm', 'LICENSE-MIT', 'LICENSE-APACHE']) {
     check(files.has(file), `npm tarball is missing ${file}`);
@@ -130,7 +131,7 @@ function validate(directory) {
     run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false', tarball], smoke);
     run('node', ['--input-type=module', '-e', `
       import assert from 'node:assert/strict';
-      import { init, Producer, Consumer } from 'doxsync';
+      import { init, Producer, Consumer } from '${npmName}';
       await init();
       const producer = new Producer({ count: 1n }, [1]);
       const consumer = new Consumer();
@@ -188,7 +189,7 @@ try {
     run('cargo', ['publish', '--locked', '--registry', 'crates-io'], join(root, 'doxsync-rs'));
     stage = 'npm publish';
     run('npm', ['publish', tarball, '--ignore-scripts', '--access', 'public', '--tag', npmTag, '--registry', npmRegistry]);
-    console.log(`Released doxsync v${version} to crates.io and npm.`);
+    console.log(`Released doxsync v${version} to crates.io and ${npmName}@${version} to npm.`);
   }
 } catch (error) {
   console.error(`Release stopped during ${stage}: ${error.message}`);
