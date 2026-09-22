@@ -2,8 +2,8 @@
 
 ## 2026-09
 
-- [x] Avoid panics when a message contains more map keys than the string pool
-      can hold.
+- [x] Support messages with more map keys than the string pool can hold by
+      encoding uncached keys inline with a two-bit tag.
 - [x] Decode messages transactionally so invalid data does not mutate consumer
       state.
 - [x] Enforce size and key limits on the consumer string pool.

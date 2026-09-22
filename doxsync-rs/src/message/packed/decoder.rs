@@ -753,19 +753,46 @@ impl PackedMessageDecoder {
         let mut value = BTreeMap::new();
         for index in 0..value_len {
             let key = Self::unpack_varuint(bytes).map_err(|e| e.with_context("unpack map key"))?;
-            let key = u32::try_from(key).map_err(|_| {
-                Error::new(ErrorKind::InvalidData, "map key too large")
-                    .with_metadata("index", index)
-            })?;
-            let key = state.get_string(key).ok_or_else(|| {
-                Error::new(ErrorKind::InvalidData, "map key not found in string pool")
-                    .with_metadata("index", index)
-                    .with_metadata("key", key)
-            })?;
+            let key_payload = key >> 2;
+            let key = match key & 0b11 {
+                0b00 => {
+                    let key = u32::try_from(key_payload).map_err(|_| {
+                        Error::new(ErrorKind::InvalidData, "map key too large")
+                            .with_metadata("index", index)
+                    })?;
+                    state.get_string(key).cloned().ok_or_else(|| {
+                        Error::new(ErrorKind::InvalidData, "map key not found in string pool")
+                            .with_metadata("index", index)
+                            .with_metadata("key", key)
+                    })?
+                }
+                0b01 => {
+                    let key_len = usize::try_from(key_payload).map_err(|_| {
+                        Error::new(ErrorKind::InvalidData, "map key too large")
+                            .with_metadata("index", index)
+                    })?;
+                    let key_bytes = bytes.get(..key_len).ok_or_else(|| {
+                        unexpected_end_of_value()
+                            .with_metadata("index", index)
+                            .with_metadata("key_len", key_len)
+                    })?;
+                    let key = std::str::from_utf8(key_bytes).map_err(|_| {
+                        Error::new(ErrorKind::InvalidData, "invalid UTF-8 map key")
+                            .with_metadata("index", index)
+                    })?;
+                    let key = Arc::new(key.to_owned());
+                    *bytes = bytes.get(key_len..).ok_or_else(unexpected_end_of_value)?;
+                    key
+                }
+                _ => {
+                    return Err(Error::new(ErrorKind::InvalidData, "invalid map key type")
+                        .with_metadata("index", index));
+                }
+            };
 
             let item_value =
                 Self::unpack_value(bytes, state).map_err(|e| e.with_context("unpack map value"))?;
-            if value.insert(key.clone(), item_value).is_some() {
+            if value.insert(key, item_value).is_some() {
                 return Err(Error::new(ErrorKind::InvalidData, "duplicate map key")
                     .with_metadata("index", index));
             }

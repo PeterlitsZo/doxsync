@@ -332,11 +332,12 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
         }
 
         for (key, value) in value.iter() {
-            let key = self
-                .state_txn
-                .get_string_key(key)
-                .expect("string key not found");
-            self.pack_varuint(bytes, key as u64);
+            if let Some(key) = self.state_txn.get_string_key(key) {
+                self.pack_varuint(bytes, (key as u64) << 2 | 0b00);
+            } else {
+                self.pack_varuint(bytes, (key.len() as u64) << 2 | 0b01);
+                bytes.extend_from_slice(key.as_bytes());
+            }
             self.pack_value(bytes, value);
         }
     }

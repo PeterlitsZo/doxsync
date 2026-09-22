@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    Error, ErrorKind, Result, Value, ValueInner,
+    Result, Value, ValueInner,
     patch::{Action, Path},
     protocol::{
         PoolPreparation, PoolSavepoint,
@@ -19,26 +19,26 @@ struct ValueCostCache {
 }
 
 impl ValueCostCache {
-    fn base_cost(&mut self, value: &Value) -> Result<usize> {
+    fn base_cost(&mut self, value: &Value) -> usize {
         if let Some(cost) = self.costs.get(&value.hash()) {
-            return Ok(*cost);
+            return *cost;
         }
         let mut cost = value_base_cost(value);
         match value.inner() {
             ValueInner::Array { inner } => {
                 for value in inner {
-                    cost = add_len(cost, self.base_cost(value)?)?;
+                    cost += self.base_cost(value);
                 }
             }
             ValueInner::Map { inner } => {
                 for value in inner.values() {
-                    cost = add_len(cost, self.base_cost(value)?)?;
+                    cost += self.base_cost(value);
                 }
             }
             _ => {}
         }
         self.costs.insert(value.hash(), cost);
-        Ok(cost)
+        cost
     }
 }
 
@@ -50,8 +50,8 @@ pub(super) struct CostSavepoint {
     body_bytes: usize,
 }
 
-/// Exact wire length for an incrementally selected operation prefix.
-/// The caller owns commit/rollback of the borrowed transaction.
+/// Exact wire length for an incrementally selected operation prefix. The caller
+/// owns commit/rollback of the borrowed transaction.
 pub(super) struct CostSession<'s> {
     pools: PoolPreparation<'s>,
     values: ValueCostCache,
@@ -98,24 +98,19 @@ impl<'s> CostSession<'s> {
         self.pools.append(action)?;
         let mut cost = varuint_len(action_tag(action));
         match action {
-            Action::Snapshot { value } => cost = add_len(cost, self.value_cost(value)?)?,
+            Action::Snapshot { value } => cost += self.value_cost(value)?,
             Action::Add { path, value } | Action::Replace { path, value } => {
-                cost = add_len(cost, self.path_cost(path))?;
-                cost = add_len(cost, self.value_cost(value)?)?;
+                cost += self.path_cost(path);
+                cost += self.value_cost(value)?;
             }
-            Action::Delete { path } => cost = add_len(cost, self.path_cost(path))?,
+            Action::Delete { path } => cost += self.path_cost(path),
             Action::Copy { path, from } => {
-                cost = add_len(cost, self.path_cost(path))?;
-                cost = add_len(cost, self.path_cost(from))?;
+                cost += self.path_cost(path);
+                cost += self.path_cost(from);
             }
         }
-        self.body_bytes = add_len(self.body_bytes, cost)?;
+        self.body_bytes += cost;
         self.actions += 1;
-        // Keep encoded_len infallible even if an operation sequence is too large for usize.
-        add_len(
-            add_len(self.pools.metadata_len(), varuint_len(self.actions as u64))?,
-            self.body_bytes,
-        )?;
         Ok(())
     }
 
@@ -124,9 +119,13 @@ impl<'s> CostSession<'s> {
     }
 
     fn value_cost(&mut self, value: &Value) -> Result<usize> {
-        let mut cost = self.values.base_cost(value)?;
+        let mut cost = self.values.base_cost(value);
         visit_map_keys(value, &mut |key| {
-            cost = add_len(cost, varuint_len(self.pools.string_key(key) as u64))?;
+            let key_cost = match self.pools.string_key(key) {
+                Some(key) => varuint_len((key as u64) << 2 | 0b00),
+                None => varuint_len((key.len() as u64) << 2 | 0b01) + key.len(),
+            };
+            cost += key_cost;
             Ok(())
         })?;
         Ok(cost)
@@ -135,9 +134,4 @@ impl<'s> CostSession<'s> {
     pub(super) fn encoded_len(&self) -> usize {
         self.pools.metadata_len() + varuint_len(self.actions as u64) + self.body_bytes
     }
-}
-
-fn add_len(left: usize, right: usize) -> Result<usize> {
-    left.checked_add(right)
-        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "encoded length too large"))
 }

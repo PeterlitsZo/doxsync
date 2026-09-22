@@ -140,12 +140,11 @@ impl<'s> PoolPreparation<'s> {
         if self.string_seen.contains(string) {
             return Ok(());
         }
-        // The previously touched resources must remain resident for all body references.
+        // Keep prepared keys resident so body references and incremental costs
+        // stay valid. Additional distinct keys are encoded inline without
+        // changing the pool.
         if self.strings.len() >= STRING_POOL_CAPACITY {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                "too many distinct map keys",
-            ));
+            return Ok(());
         }
         self.string_seen.insert(string.clone());
         self.strings.push(string.clone());
@@ -222,10 +221,8 @@ impl<'s> PoolPreparation<'s> {
         Ok(())
     }
 
-    pub(crate) fn string_key(&self, string: &Arc<String>) -> u32 {
-        self.txn
-            .get_string_key(string)
-            .expect("prepared string missing")
+    pub(crate) fn string_key(&self, string: &Arc<String>) -> Option<u32> {
+        self.txn.get_string_key(string)
     }
 
     pub(crate) fn path_key(&self, path: &Path) -> u32 {

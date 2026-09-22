@@ -225,9 +225,9 @@ mod tests {
                 01
                   + 00
                       + 52
-                          + 00 // index of "answer"
+                          + 00 // ref to "answer"
                           + 0c 2a // value int(42)
-                          + 01 // index of "pi"
+                          + 04 // ref to "pi"
                           + 7b 4a d8 12 4d fb 21 09 40 // value float(3.1415926)
             "# })
         );
@@ -270,7 +270,7 @@ mod tests {
                   |   + 52 // the map value
                   |       + 00
                   |       + 0c 2a
-                  |       + 01
+                  |       + 04 // ref to "pi"
                   |       + 39 33 2e 31 34 31 35 39 32 36
                   + 02 // Delete
                       + 01
