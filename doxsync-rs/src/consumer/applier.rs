@@ -1,4 +1,4 @@
-use crate::{Document, Error, ErrorKind, Message, Result, Value, message::{Action, PathSegment}};
+use crate::{Document, Error, ErrorKind, Message, Result, Value, patch::{Action, PathSegment}};
 
 pub(super) struct Applier<'d> {
     document: Option<&'d Document>,

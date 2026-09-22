@@ -4,13 +4,12 @@ use blake3::Hash;
 
 use crate::{
     Result, Value, ValueKind,
-    message::{Path, PathSegment, value_own_cost},
+    patch::{Path, PathSegment},
 };
 
 pub(crate) struct IndexEntry {
     pub(crate) path: Path,
     pub(crate) value: Value,
-    pub(crate) cost: usize,
 }
 
 /// The doxsync document type.
@@ -40,7 +39,7 @@ impl Debug for Document {
 impl Document {
     pub fn new(value: Value) -> Self {
         Self {
-            index: Self::build_index(&value, None),
+            index: Self::build_index(&value),
             value,
         }
     }
@@ -56,7 +55,7 @@ impl Document {
         let mut value = self.value.clone();
         f(&mut value)?;
         Ok(Self {
-            index: Self::build_index(&value, Some(&self.index)),
+            index: Self::build_index(&value),
             value,
         })
     }
@@ -65,25 +64,9 @@ impl Document {
         self.index.clone()
     }
 
-    fn build_index(
-        value: &Value,
-        prev_index: Option<&HashMap<Hash, IndexEntry>>,
-    ) -> Arc<HashMap<Hash, IndexEntry>> {
-        fn update_index(
-            index: &mut HashMap<Hash, IndexEntry>,
-            prev_index: Option<&HashMap<Hash, IndexEntry>>,
-            path: &mut Path,
-            value: &Value,
-        ) -> usize {
-            let hash = value.hash();
-            let cached_cost = index
-                .get(&hash)
-                .or_else(|| prev_index.and_then(|previous| previous.get(&hash)))
-                .map(|entry| entry.cost);
-            let mut cost = cached_cost.unwrap_or_else(|| value_own_cost(value));
-
-            // Even cached subtrees need fresh paths and entries for all
-            // descendants.
+    fn build_index(value: &Value) -> Arc<HashMap<Hash, IndexEntry>> {
+        fn update_index(index: &mut HashMap<Hash, IndexEntry>, path: &mut Path, value: &Value) {
+            // Every occurrence needs a current path, even when values share a hash.
             match value.kind() {
                 ValueKind::Array => {
                     for (position, item) in value
@@ -93,38 +76,30 @@ impl Document {
                         .enumerate()
                     {
                         path.push_segment(PathSegment::Index(position));
-                        let child_cost = update_index(index, prev_index, path, item);
-                        if cached_cost.is_none() {
-                            cost += child_cost;
-                        }
+                        update_index(index, path, item);
                         path.pop_segment();
                     }
                 }
                 ValueKind::Map => {
                     for (key, item) in value.as_map().expect("value must be a map") {
                         path.push_segment(PathSegment::Key(key.clone()));
-                        let child_cost = update_index(index, prev_index, path, item);
-                        if cached_cost.is_none() {
-                            cost += child_cost;
-                        }
+                        update_index(index, path, item);
                         path.pop_segment();
                     }
                 }
                 _ => {}
             }
             index.insert(
-                hash,
+                value.hash(),
                 IndexEntry {
                     path: path.clone(),
                     value: value.clone(),
-                    cost,
                 },
             );
-            cost
         }
 
         let mut index = HashMap::new();
-        update_index(&mut index, prev_index, &mut Path::empty(), value);
+        update_index(&mut index, &mut Path::empty(), value);
         Arc::new(index)
     }
 }

@@ -1,10 +1,8 @@
-mod action;
 mod packed;
 
 pub use packed::PackedMessage;
-pub(crate) use packed::value_own_cost;
 
-pub(crate) use action::{Action, Path, PathSegment};
+use crate::patch::Action;
 
 use crate::{
     Result,
@@ -26,10 +24,6 @@ impl Message {
         &self.actions
     }
 
-    pub(crate) fn into_actions(self) -> Vec<Action> {
-        self.actions
-    }
-
     /// Leaves successful changes in the transaction; errors restore its entry savepoint.
     pub(crate) fn decode(packed: PackedMessage, state_txn: &mut ConsumerStateTxn) -> Result<Self> {
         packed::PackedMessageDecoder::default().decode(packed, state_txn)
@@ -42,7 +36,11 @@ impl Message {
 
 #[cfg(test)]
 mod tests {
-    use crate::{ConsumerState, ProducerState, value};
+    use crate::{
+        ConsumerState, ProducerState,
+        patch::{Path, PathSegment},
+        value,
+    };
 
     use super::*;
 

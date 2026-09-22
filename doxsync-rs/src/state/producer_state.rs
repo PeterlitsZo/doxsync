@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use crate::message::Path;
+use crate::patch::Path;
 use crate::state::{Bitmap, Lru, ProducerStateTxn};
 
 pub(crate) struct ProducerState {

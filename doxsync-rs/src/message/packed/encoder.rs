@@ -1,19 +1,15 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
-use super::{
-    PackedMessage,
+use super::PackedMessage;
+use crate::message::Message;
+use crate::patch::{Action, Path, PathSegment};
+use crate::protocol::{
+    PoolPreparation,
     consts::*,
-    cost::{payload_width, varuint_len},
+    layout::{action_tag, payload_width},
 };
-use crate::message::{Action, Message, Path, PathSegment};
-use crate::state::{
-    InsertPathResult, InsertStringPoolResult, PATH_KEY_BYTES_LIMIT, PATH_PATCH_BYTES_LIMIT,
-    PATH_POOL_CAPACITY, PATH_SEGMENTS_LIMIT, ProducerStateTxn, STRING_POOL_CAPACITY,
-};
-use crate::{Error, ErrorKind, Result, Value, ValueKind};
+use crate::state::ProducerStateTxn;
+use crate::{Error, ErrorKind, Result, Value};
 
 /// An encoder for packed doxsync messages.
 pub(in crate::message) struct PackedMessageEncoder {
@@ -49,137 +45,6 @@ impl PackedMessageEncoder {
     }
 }
 
-struct MessageMetadata {
-    strings: Vec<Arc<String>>,
-    paths: Vec<Arc<Path>>,
-}
-
-impl MessageMetadata {
-    fn validate_path(path: &Path) -> Result<()> {
-        if path.segments().len() > PATH_SEGMENTS_LIMIT {
-            return Err(Error::new(ErrorKind::InvalidData, "too many path segments"));
-        }
-        let mut remaining = PATH_KEY_BYTES_LIMIT;
-        for segment in path.segments() {
-            match segment {
-                PathSegment::Key(key) => {
-                    remaining = remaining
-                        .checked_sub(key.len())
-                        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "path keys too large"))?;
-                }
-                PathSegment::Index(index) => {
-                    if u64::try_from(*index).map_or(true, |value| value > u64::MAX >> 2) {
-                        return Err(Error::new(ErrorKind::InvalidData, "path index too large"));
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn collect(
-        actions: &[Action],
-        state_txn: &ProducerStateTxn,
-        actions_limit: usize,
-    ) -> Result<Self> {
-        fn collect_strings(
-            value: &Value,
-            seen: &mut BTreeSet<Arc<String>>,
-            strings: &mut Vec<Arc<String>>,
-        ) -> Result<()> {
-            match value.kind() {
-                ValueKind::Array => {
-                    for value in value.as_array().expect("array") {
-                        collect_strings(value, seen, strings)?;
-                    }
-                }
-                ValueKind::Map => {
-                    for (key, value) in value.as_map().expect("map") {
-                        if seen.insert(key.clone()) {
-                            if seen.len() > STRING_POOL_CAPACITY {
-                                return Err(Error::new(
-                                    ErrorKind::InvalidData,
-                                    "too many distinct map keys",
-                                ));
-                            }
-                            strings.push(key.clone());
-                        }
-                        collect_strings(value, seen, strings)?;
-                    }
-                }
-                _ => {}
-            }
-            Ok(())
-        }
-
-        if actions.len() > actions_limit {
-            return Err(Error::new(ErrorKind::InvalidData, "too many actions"));
-        }
-
-        let mut strings = Vec::new();
-        let mut string_seen = BTreeSet::new();
-        let mut paths = Vec::new();
-        let mut path_seen = BTreeSet::new();
-        for action in actions {
-            match action {
-                Action::Snapshot { value } => {
-                    collect_strings(value, &mut string_seen, &mut strings)?
-                }
-                Action::Add { path, value } | Action::Replace { path, value } => {
-                    collect_strings(value, &mut string_seen, &mut strings)?;
-                    if path_seen.insert(path) {
-                        paths.push(Arc::new(path.clone()));
-                    }
-                }
-                Action::Delete { path } => {
-                    if path_seen.insert(path) {
-                        paths.push(Arc::new(path.clone()));
-                    }
-                }
-                Action::Copy { path, from } => {
-                    if path_seen.insert(path) {
-                        paths.push(Arc::new(path.clone()));
-                    }
-                    if path_seen.insert(from) {
-                        paths.push(Arc::new(from.clone()));
-                    }
-                }
-            }
-            if paths.len() > PATH_POOL_CAPACITY {
-                return Err(Error::new(
-                    ErrorKind::InvalidData,
-                    "too many distinct paths",
-                ));
-            }
-        }
-        // Validate all paths, including hits, before changing either pool.
-        for path in &paths {
-            Self::validate_path(path)?;
-        }
-        // Measure only path definitions needed by the resource limit. No bytes
-        // are allocated and existing pool entries are not touched.
-        let mut definition_bytes = 0usize;
-        for path in &paths {
-            if state_txn.get_path_key(path).is_none() {
-                let mut len = varuint_len(path.segments().len() as u64);
-                for segment in path.segments() {
-                    len += match segment {
-                        PathSegment::Key(key) => varuint_len((key.len() as u64) << 2) + key.len(),
-                        PathSegment::Index(index) => varuint_len((*index as u64) << 2 | 1),
-                    };
-                }
-                definition_bytes = definition_bytes
-                    .checked_add(len)
-                    .ok_or_else(|| Error::new(ErrorKind::InvalidData, "path patch too large"))?;
-                if definition_bytes > PATH_PATCH_BYTES_LIMIT {
-                    return Err(Error::new(ErrorKind::InvalidData, "path patch too large"));
-                }
-            }
-        }
-        Ok(Self { strings, paths })
-    }
-}
-
 struct PackedMessageEncoderInternal<'a, 's> {
     actions: &'a [Action],
     state_txn: &'s mut ProducerStateTxn,
@@ -194,27 +59,23 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
         // Now we pack the actions.
         self.pack_varuint(bytes, self.actions.len() as u64);
         for action in self.actions {
+            self.pack_varuint(bytes, action_tag(action));
             match action {
                 Action::Snapshot { value } => {
-                    self.pack_varuint(bytes, ACTION_SNAPSHOT as u64);
                     self.pack_value(bytes, value);
                 }
                 Action::Add { path, value } => {
-                    self.pack_varuint(bytes, ACTION_ADD as u64);
                     self.pack_path_by_key(bytes, &Arc::new(path.clone()))?;
                     self.pack_value(bytes, value);
                 }
                 Action::Replace { path, value } => {
-                    self.pack_varuint(bytes, ACTION_REPLACE as u64);
                     self.pack_path_by_key(bytes, &Arc::new(path.clone()))?;
                     self.pack_value(bytes, value);
                 }
                 Action::Delete { path } => {
-                    self.pack_varuint(bytes, ACTION_DELETE as u64);
                     self.pack_path_by_key(bytes, &Arc::new(path.clone()))?;
                 }
                 Action::Copy { path, from } => {
-                    self.pack_varuint(bytes, ACTION_COPY as u64);
                     self.pack_path_by_key(bytes, &Arc::new(path.clone()))?;
                     self.pack_path_by_key(bytes, &Arc::new(from.clone()))?;
                 }
@@ -225,35 +86,13 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
     }
 
     fn encode_metadata(&mut self, bytes: &mut Vec<u8>) -> Result<()> {
-        let MessageMetadata { strings, paths } =
-            MessageMetadata::collect(self.actions, self.state_txn, self.actions_limit)?;
-
-        let mut string_patch = Vec::new();
-        for string in strings {
-            self.state_txn.hit_string_pool_if_exists(&string);
-            if self.state_txn.get_string_key(&string).is_none() {
-                match self.state_txn.insert_string_pool(&string) {
-                    InsertStringPoolResult::Inserted { key }
-                    | InsertStringPoolResult::Replaced { key } => string_patch.push((key, string)),
-                    InsertStringPoolResult::Existing { .. } => unreachable!("new string"),
-                }
-            }
+        let mut preparation = PoolPreparation::new(self.state_txn, self.actions_limit);
+        for action in self.actions {
+            preparation.append(action)?;
         }
-
-        let mut path_patch = Vec::new();
-        for path in paths {
-            self.state_txn.hit_path_pool_if_exists(&path);
-            if self.state_txn.get_path_key(&path).is_none() {
-                let mut definition = Vec::new();
-                self.pack_path(&mut definition, &path);
-                match self.state_txn.insert_path_pool(&path) {
-                    InsertPathResult::Inserted { key } | InsertPathResult::Replaced { key } => {
-                        path_patch.push((key, definition))
-                    }
-                    InsertPathResult::Existing { .. } => unreachable!("new path"),
-                }
-            }
-        }
+        let prepared = preparation.finish();
+        let string_patch = prepared.strings;
+        let path_patch = prepared.paths;
 
         self.pack_varuint(
             bytes,
@@ -261,7 +100,7 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
         );
 
         if !string_patch.is_empty() {
-            self.pack_varuint(bytes, 0);
+            self.pack_varuint(bytes, METADATA_STRINGS);
             self.pack_varuint(bytes, string_patch.len() as u64);
             for (key, string) in string_patch {
                 self.pack_varuint(bytes, key as u64);
@@ -271,11 +110,11 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
         }
 
         if !path_patch.is_empty() {
-            self.pack_varuint(bytes, 1);
+            self.pack_varuint(bytes, METADATA_PATHS);
             self.pack_varuint(bytes, path_patch.len() as u64);
-            for (key, definition) in path_patch {
+            for (key, path) in path_patch {
                 self.pack_varuint(bytes, key as u64);
-                bytes.extend_from_slice(&definition);
+                self.pack_path(bytes, &path);
             }
         }
 

@@ -1,4 +1,4 @@
-use crate::message::{Action, Path};
+use crate::patch::{Action, Path};
 use crate::value;
 
 use super::*;

@@ -1,4 +1,4 @@
-use crate::message::Path;
+use crate::patch::Path;
 use std::{collections::BTreeMap, sync::Arc};
 
 use super::{

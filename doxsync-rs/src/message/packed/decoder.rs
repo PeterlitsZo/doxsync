@@ -3,8 +3,10 @@ use std::{
     sync::Arc,
 };
 
-use super::{PackedMessage, consts::*};
-use crate::message::{Action, Message, Path, PathSegment};
+use super::PackedMessage;
+use crate::message::Message;
+use crate::patch::{Action, Path, PathSegment};
+use crate::protocol::consts::*;
 use crate::state::{
     ConsumerStateTxn, PATH_KEY_BYTES_LIMIT, PATH_PATCH_BYTES_LIMIT, PATH_POOL_CAPACITY,
     PATH_SEGMENTS_LIMIT, STRING_POOL_CAPACITY,
@@ -59,12 +61,12 @@ impl PackedMessageDecoder {
                 );
             }
             match instruction {
-                0 => {
+                METADATA_STRINGS => {
                     let patch = Self::unpack_string_pool_patch(&mut bytes)
                         .map_err(|e| e.with_context("unpack string pool patch"))?;
                     state.apply_string_pool_patch(patch);
                 }
-                1 => {
+                METADATA_PATHS => {
                     let patch = Self::unpack_path_pool_patch(&mut bytes).map_err(|e| {
                         e.with_context("unpack path pool patch")
                             .with_metadata("metadata_index", index)

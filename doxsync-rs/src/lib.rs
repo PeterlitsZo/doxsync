@@ -2,7 +2,9 @@ mod consumer;
 mod document;
 mod error;
 mod message;
+mod patch;
 mod producer;
+mod protocol;
 mod state;
 mod value;
 

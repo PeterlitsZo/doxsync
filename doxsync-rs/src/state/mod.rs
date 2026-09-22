@@ -9,7 +9,9 @@ mod producer_state_txn;
 pub(crate) use consumer_state::ConsumerState;
 pub(crate) use consumer_state_txn::ConsumerStateTxn;
 pub(crate) use producer_state::ProducerState;
-pub(crate) use producer_state_txn::{InsertPathResult, InsertStringPoolResult, ProducerStateTxn};
+pub(crate) use producer_state_txn::{
+    InsertPathResult, InsertStringPoolResult, ProducerStateSavepoint, ProducerStateTxn,
+};
 
 use bitmap::Bitmap;
 use lru::Lru;

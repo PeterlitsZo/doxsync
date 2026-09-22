@@ -1,7 +1,9 @@
-use crate::message::Action;
+use crate::patch::Action;
 use crate::{Document, Message, PackedMessage, ProducerState, Result};
 
+mod cost;
 mod differ;
+use cost::CostSession;
 use differ::Differ;
 
 pub struct Producer {
@@ -37,7 +39,7 @@ impl Producer {
         result
     }
 
-    /// Packs an encodable change selected by estimated cost. On failure the baseline and pools
+    /// Packs an encodable change selected by exact encoded cost. On failure the baseline and pools
     /// remain unchanged, so the same update can be retried.
     pub fn produce_diff(&mut self) -> Result<Option<PackedMessage>> {
         let Some(message) = self.next_message()? else {
@@ -49,7 +51,7 @@ impl Producer {
     }
 
     /// Produces a structured message and advances the document baseline.
-    /// Cost estimation and resource validation leave pools unchanged. Pack and deliver
+    /// Cost calculation and resource validation leave pools unchanged. Pack and deliver
     /// each returned message before requesting another; retain a clone for retry
     /// if packing fails. Prefer `produce_diff` for atomic baseline advancement.
     pub fn produce_diff_unpacked(&mut self) -> Result<Option<Message>> {
@@ -64,16 +66,20 @@ impl Producer {
         if self.last_emited_document.as_ref() == Some(&self.current_document) {
             return Ok(None);
         }
-        let txn = self.state.take().expect("producer state").txn();
-        let result = match &self.last_emited_document {
-            Some(last) => Differ::new(&txn).diff(last, &self.current_document),
-            None => {
-                Ok(Message::new(vec![Action::Snapshot {
-                    value: self.current_document.value(),
-                }]))
+        let mut txn = self.state.take().expect("producer state").txn();
+        let result = {
+            let mut cost = CostSession::new(&mut txn);
+            match &self.last_emited_document {
+                Some(last) => Differ::new(last, &mut cost).diff(&self.current_document),
+                None => {
+                    let action = Action::Snapshot {
+                        value: self.current_document.value(),
+                    };
+                    cost.append(&action).map(|()| vec![action])
+                }
             }
         };
         self.state = Some(txn.rollback());
-        result.map(Some)
+        result.map(|actions| Some(Message::new(actions)))
     }
 }

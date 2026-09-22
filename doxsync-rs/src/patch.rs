@@ -174,7 +174,6 @@ impl Path {
                                 break;
                             }
                             '\'' | '\\' => {
-
                                 return Err(Error::new(
                                     ErrorKind::InvalidData,
                                     "invalid character in key",
