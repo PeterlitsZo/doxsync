@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>doxsync · Sync playground</title>
+    <link rel="stylesheet" href="./browser.css">
+    <script type="module" src="./browser.js"></script>
+  </head>
+  <body>
+    <main>
+      <header class="page-header">
+        <div>
+          <p class="brand">doxsync <span>/ browser demo</span></p>
+          <h1>Watch every change sync.</h1>
+          <p class="intro">Change the producer, watch messages travel, and see the consumer catch up.</p>
+        </div>
+        <p id="sync-state" class="sync-state" data-state="loading" role="status">Loading WASM…</p>
+      </header>
+
+      <section class="controls" aria-label="Simulation controls">
+        <div class="buttons">
+          <button id="toggle" class="primary" disabled>Pause auto updates</button>
+          <button id="step" disabled>Change once</button>
+          <button id="reset" disabled>Reset</button>
+        </div>
+        <label>Update interval
+          <select id="interval" disabled>
+            <option value="500">0.5 s</option>
+            <option value="1000">1 s</option>
+            <option value="1500" selected>1.5 s</option>
+            <option value="3000">3 s</option>
+          </select>
+        </label>
+        <label>Delivery delay
+          <span class="delay-input"><input id="delay" type="number" min="0" max="10000" step="100" value="1000" disabled><span>ms</span></span>
+        </label>
+      </section>
+      <p class="control-note">Delay changes apply to new messages. Delivery stays ordered, and queued messages continue arriving while updates are paused.</p>
+      <div id="error" class="error" role="alert" hidden></div>
+
+      <section class="documents" aria-label="Producer and consumer documents">
+        <article class="document-panel producer-panel">
+          <header class="panel-header">
+            <div><span class="role-dot"></span><h2>Producer</h2><span class="subtle">Source document</span></div>
+            <span id="producer-version" class="version">—</span>
+          </header>
+          <pre class="document-code" tabindex="0" aria-label="Current producer document"><code id="producer-document">Waiting for initialization…</code></pre>
+          <footer id="producer-change" class="document-footer">Preparing the initial document</footer>
+        </article>
+        <article class="document-panel consumer-panel">
+          <header class="panel-header">
+            <div><span class="role-dot"></span><h2>Consumer</h2><span class="subtle">Received document</span></div>
+            <span id="consumer-version" class="version">—</span>
+          </header>
+          <pre class="document-code" tabindex="0" aria-label="Current consumer document"><code id="consumer-document">Waiting for the first snapshot…</code></pre>
+          <footer id="consumer-change" class="document-footer">Updates when a message arrives</footer>
+        </article>
+      </section>
+
+      <section class="transport" aria-label="Message delivery">
+        <header class="transport-header">
+          <div><h2>Message delivery</h2><span class="subtle">Producer <span aria-hidden="true">→</span> Consumer</span></div>
+          <p id="metrics">Sent 0 · 0 B · In flight 0</p>
+        </header>
+        <div class="message-workspace">
+          <div class="message-history">
+            <div class="history-heading"><span>Message / Change</span><span>Size / Status</span></div>
+            <ol id="message-list" aria-label="Message history; select a message to inspect its raw bytes"></ol>
+            <p class="history-note">Showing the latest 60 delivered messages and all messages in flight.</p>
+          </div>
+          <section class="message-detail" aria-label="Selected message details">
+            <div class="detail-heading">
+              <h3 id="message-title">Waiting for a message</h3>
+              <label class="follow"><input id="follow" type="checkbox" checked>Follow latest</label>
+            </div>
+            <p id="message-description" class="message-description">Select a message to inspect the actual bytes sent.</p>
+            <dl id="message-facts" class="message-facts">
+              <div><dt>Size</dt><dd id="detail-size">—</dd></div>
+              <div><dt>Status</dt><dd id="detail-status">—</dd></div>
+              <div><dt>Set delay</dt><dd id="detail-delay">—</dd></div>
+              <div><dt>Elapsed</dt><dd id="detail-elapsed">—</dd></div>
+            </dl>
+            <div class="bytes-heading"><span>RAW MESSAGE · HEX</span><span>Byte offsets on the left</span></div>
+            <pre id="message-bytes" class="message-bytes" tabindex="0" aria-label="Message bytes in hexadecimal">No messages yet</pre>
+          </section>
+        </div>
+      </section>
+      <footer class="page-footer"><span>Real Rust / WASM synchronization with simulated network delivery.</span><span>Highlighted lines show the latest local update. <code>n</code> marks a bigint.</span></footer>
+    </main>
+  </body>
+</html>

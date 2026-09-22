@@ -8,6 +8,9 @@ mod protocol;
 mod state;
 mod value;
 
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+mod wasm;
+
 #[doc(hidden)]
 pub mod __private;
 

@@ -2,6 +2,8 @@
 
 ## Behavior
 
+- Use English for all project content, including UI text, documentation, comments,
+  and example data.
 - DO NOT add unit tests until the user asks you to do.
 
 ## When You Need to Commit

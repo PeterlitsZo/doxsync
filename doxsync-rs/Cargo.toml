@@ -3,8 +3,18 @@ name = "doxsync"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+wasm = ["dep:wasm-bindgen", "dep:js-sys"]
+
 [dependencies]
 blake3 = "1.8.7"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "0.2.127", optional = true }
+js-sys = { version = "0.3.104", optional = true }
 
 [dev-dependencies]
 hex = "0.4.3"
