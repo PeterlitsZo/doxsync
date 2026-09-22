@@ -257,7 +257,10 @@ mod tests {
         assert_eq!(
             packed.bytes(),
             hex_to_bytes(indoc::indoc! { r#"
-                01
+                02
+                  + 00 01 // string pool patch
+                  |   + 02 // slot 2 -> "3.1415926"
+                  |       + 09 33 2e 31 34 31 35 39 32 36
                   + 01 02 // path pool patch
                       + 00 02 // slot 0 -> path "foo.42"
                       |   + 0c 66 6f 6f
@@ -270,8 +273,8 @@ mod tests {
                   |   + 52 // the map value
                   |       + 00
                   |       + 0c 2a
-                  |       + 04 // ref to "pi"
-                  |       + 39 33 2e 31 34 31 35 39 32 36
+                  |       + 04 // Key (ref to "pi")
+                  |       + 82 // TStrRef value (ref to "3.1415926")
                   + 02 // Delete
                       + 01
             "# })

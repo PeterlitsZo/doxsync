@@ -13,7 +13,7 @@ use crate::{
 use super::{
     consts::{METADATA_PATHS, METADATA_STRINGS},
     layout::{path_definition_len, varuint_len},
-    visit_map_keys,
+    visit_strings,
 };
 
 /// Definitions in their first-use order. No encoded payloads are allocated.
@@ -120,10 +120,10 @@ impl<'s> PoolPreparation<'s> {
         }
         match action {
             Action::Snapshot { value } => {
-                visit_map_keys(value, &mut |key| self.prepare_string(key))?;
+                visit_strings(value, &mut |string, _| self.prepare_string(string))?;
             }
             Action::Add { path, value } | Action::Replace { path, value } => {
-                visit_map_keys(value, &mut |key| self.prepare_string(key))?;
+                visit_strings(value, &mut |string, _| self.prepare_string(string))?;
                 self.prepare_path(path)?;
             }
             Action::Delete { path } => self.prepare_path(path)?,
@@ -140,8 +140,8 @@ impl<'s> PoolPreparation<'s> {
         if self.string_seen.contains(string) {
             return Ok(());
         }
-        // Keep prepared keys resident so body references and incremental costs
-        // stay valid. Additional distinct keys are encoded inline without
+        // Keep prepared strings resident so body references and incremental costs
+        // stay valid. Additional distinct strings are encoded inline without
         // changing the pool.
         if self.strings.len() >= STRING_POOL_CAPACITY {
             return Ok(());

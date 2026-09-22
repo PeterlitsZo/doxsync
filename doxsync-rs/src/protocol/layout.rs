@@ -22,7 +22,8 @@ pub(crate) fn varuint_len(value: u64) -> usize {
 
 /// Encoded base cost.
 ///
-/// Excluding child values, map keys, actions, paths, and pool patches.
+/// Excluding child values, map keys, TStr encodings, actions, paths, and pool
+/// patches.
 pub(crate) fn value_base_cost(value: &Value) -> usize {
     match value.inner() {
         ValueInner::PosInt { inner } => 1 + payload_width(*inner, posint::INLINE),
@@ -32,11 +33,22 @@ pub(crate) fn value_base_cost(value: &Value) -> usize {
         ValueInner::BStr { inner } => {
             1 + payload_width(inner.len() as u64, bstr::INLINE) + inner.len()
         }
-        ValueInner::TStr { inner } => {
-            1 + payload_width(inner.len() as u64, tstr::INLINE) + inner.len()
-        }
+        ValueInner::TStr { .. } => 0,
         ValueInner::Array { inner } => 1 + payload_width(inner.len() as u64, array::INLINE),
         ValueInner::Map { inner } => 1 + payload_width(inner.len() as u64, map::INLINE),
+    }
+}
+
+/// Use a pool reference only when it is strictly shorter than the literal.
+pub(crate) fn tstr_ref_key(value_len: usize, key: Option<u32>) -> Option<u32> {
+    let literal_len = 1 + payload_width(value_len as u64, tstr::INLINE) + value_len;
+    key.filter(|key| 1 + payload_width(*key as u64, posint::INLINE) < literal_len)
+}
+
+pub(crate) fn tstr_encoded_len(value_len: usize, key: Option<u32>) -> usize {
+    match tstr_ref_key(value_len, key) {
+        Some(key) => 1 + payload_width(key as u64, posint::INLINE),
+        None => 1 + payload_width(value_len as u64, tstr::INLINE) + value_len,
     }
 }
 

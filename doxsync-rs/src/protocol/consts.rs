@@ -7,6 +7,7 @@ pub(crate) const TAG_TSTR: u8 = 0b0011;
 pub(crate) const TAG_ARRAY: u8 = 0b0100;
 pub(crate) const TAG_MAP: u8 = 0b0101;
 pub(crate) const TAG_FLOAT: u8 = 0b0111;
+pub(crate) const TAG_TSTR_REF: u8 = 0b1000;
 
 pub(crate) const TAG_WIDTH: usize = 4;
 pub(crate) const PAYLOAD_MASK: u8 = 0x0F;

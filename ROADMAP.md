@@ -8,6 +8,7 @@
       state.
 - [x] Enforce size and key limits on the consumer string pool.
 - [ ] Limit string lengths in the string pool.
+- [x] Cache TStr values alongside map keys and use pool references when shorter.
 - [ ] Add a FIFO/LRU admission queue for caching TStr values.
 - [ ] Support caching BStr values.
 - [ ] Represent each path using a parent reference and the current segment to

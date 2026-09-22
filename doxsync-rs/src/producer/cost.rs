@@ -4,15 +4,16 @@ use crate::{
     Result, Value, ValueInner,
     patch::{Action, Path},
     protocol::{
-        PoolPreparation, PoolSavepoint,
+        PoolPreparation, PoolSavepoint, StringUsage,
         consts::DEFAULT_ACTIONS_LIMIT,
-        layout::{action_tag, value_base_cost, varuint_len},
-        visit_map_keys,
+        layout::{action_tag, tstr_encoded_len, value_base_cost, varuint_len},
+        visit_strings,
     },
     state::ProducerStateTxn,
 };
 
-/// Only state-independent subtree bytes are memoized. Key references are never cached.
+/// Only state-independent subtree bytes are memoized. String encodings are
+/// never cached.
 #[derive(Default)]
 struct ValueCostCache {
     costs: HashMap<blake3::Hash, usize>,
@@ -120,12 +121,15 @@ impl<'s> CostSession<'s> {
 
     fn value_cost(&mut self, value: &Value) -> Result<usize> {
         let mut cost = self.values.base_cost(value);
-        visit_map_keys(value, &mut |key| {
-            let key_cost = match self.pools.string_key(key) {
-                Some(key) => varuint_len((key as u64) << 2 | 0b00),
-                None => varuint_len((key.len() as u64) << 2 | 0b01) + key.len(),
+        visit_strings(value, &mut |string, usage| {
+            let key = self.pools.string_key(string);
+            cost += match usage {
+                StringUsage::MapKey => match key {
+                    Some(key) => varuint_len((key as u64) << 2 | 0b00),
+                    None => varuint_len((string.len() as u64) << 2 | 0b01) + string.len(),
+                },
+                StringUsage::TStr => tstr_encoded_len(string.len(), key),
             };
-            cost += key_cost;
             Ok(())
         })?;
         Ok(cost)

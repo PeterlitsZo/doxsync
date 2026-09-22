@@ -274,13 +274,14 @@ fn test_produce_then_consume_002() {
         &mut consumer,
         &document,
         &[
-            Action::copy(
+            // Cached text values make ADD cheaper than defining COPY source paths.
+            Action::add(
                 Path::parse("users_by_id.user_1").unwrap(),
-                Path::parse("users.0").unwrap(),
+                value!({ "name": "Peterlits", "id": "user_1" }).unwrap(),
             ),
-            Action::copy(
+            Action::add(
                 Path::parse("users_by_id.user_2").unwrap(),
-                Path::parse("users.1").unwrap(),
+                value!({ "name": "Foobar", "id": "user_2" }).unwrap(),
             ),
         ],
     );

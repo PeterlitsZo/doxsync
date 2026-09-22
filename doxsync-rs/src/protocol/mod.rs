@@ -10,23 +10,31 @@ use std::sync::Arc;
 
 use crate::{Result, Value, ValueInner};
 
-/// Visits every map key occurrence in wire order, including nested values.
-pub(crate) fn visit_map_keys(
+#[derive(Clone, Copy)]
+pub(crate) enum StringUsage {
+    MapKey,
+    TStr,
+}
+
+/// Visits every map key and TStr occurrence in wire order, including nested
+/// values.
+pub(crate) fn visit_strings(
     value: &Value,
-    visit: &mut impl FnMut(&Arc<String>) -> Result<()>,
+    visit: &mut impl FnMut(&Arc<String>, StringUsage) -> Result<()>,
 ) -> Result<()> {
     match value.inner() {
         ValueInner::Array { inner } => {
             for value in inner {
-                visit_map_keys(value, visit)?;
+                visit_strings(value, visit)?;
             }
         }
         ValueInner::Map { inner } => {
             for (key, value) in inner {
-                visit(key)?;
-                visit_map_keys(value, visit)?;
+                visit(key, StringUsage::MapKey)?;
+                visit_strings(value, visit)?;
             }
         }
+        ValueInner::TStr { inner } => visit(inner, StringUsage::TStr)?,
         _ => {}
     }
     Ok(())

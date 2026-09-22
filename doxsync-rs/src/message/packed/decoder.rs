@@ -345,6 +345,7 @@ impl PackedMessageDecoder {
             TAG_NEGINT => Self::unpack_negint(bytes).map_err(|e| e.with_context("unpack negint")),
             TAG_BSTR => Self::unpack_bstr(bytes).map_err(|e| e.with_context("unpack binary string")),
             TAG_TSTR => Self::unpack_tstr(bytes).map_err(|e| e.with_context("unpack text string")),
+            TAG_TSTR_REF => Self::unpack_tstr_ref(bytes, state).map_err(|e| e.with_context("unpack text string reference")),
             TAG_ARRAY => Self::unpack_array(bytes, state).map_err(|e| e.with_context("unpack array")),
             TAG_FLOAT => Self::unpack_simple_or_float(bytes).map_err(|e| e.with_context("unpack simple value or float")),
             TAG_MAP => Self::unpack_map(bytes, state).map_err(|e| e.with_context("unpack map")),
@@ -515,6 +516,41 @@ impl PackedMessageDecoder {
         *bytes = bytes.get(value_len..).ok_or_else(unexpected_end_of_value)?;
 
         Ok(Value::inner_bstr(value))
+    }
+
+    fn unpack_tstr_ref(bytes: &mut &[u8], state: &ConsumerStateTxn) -> Result<Value> {
+        let first_byte = bytes.first().copied().ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                "unexpected end of text string reference",
+            )
+        })?;
+        let payload = first_byte & PAYLOAD_MASK;
+        let (key, encoded_len) = if payload <= posint::INLINE {
+            (payload as u64, 1)
+        } else {
+            let width = 1usize << (payload - posint::BITS_8);
+            let key_bytes = bytes.get(1..1 + width).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    "unexpected end of text string reference",
+                )
+            })?;
+            let mut buffer = [0u8; 8];
+            buffer[..width].copy_from_slice(key_bytes);
+            (u64::from_le_bytes(buffer), 1 + width)
+        };
+        let key = u32::try_from(key)
+            .map_err(|_| Error::new(ErrorKind::InvalidData, "text string reference too large"))?;
+        let string = state.get_string(key).ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                "text string not found in string pool",
+            )
+            .with_metadata("key", key)
+        })?;
+        *bytes = &bytes[encoded_len..];
+        Ok(Value::inner_tstr(string.as_ref().clone()))
     }
 
     fn unpack_tstr(bytes: &mut &[u8]) -> Result<Value> {

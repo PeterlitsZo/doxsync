@@ -6,7 +6,7 @@ use crate::patch::{Action, Path, PathSegment};
 use crate::protocol::{
     PoolPreparation,
     consts::*,
-    layout::{action_tag, payload_width},
+    layout::{action_tag, payload_width, tstr_ref_key},
 };
 use crate::state::ProducerStateTxn;
 use crate::{Error, ErrorKind, Result, Value};
@@ -248,7 +248,23 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
         bytes.extend_from_slice(value);
     }
 
-    fn pack_tstr(&mut self, bytes: &mut Vec<u8>, value: &str) {
+    fn pack_tstr(&mut self, bytes: &mut Vec<u8>, value: &Arc<String>) {
+        if let Some(key) = tstr_ref_key(value.len(), self.state_txn.get_string_key(value)) {
+            let width = payload_width(key as u64, posint::INLINE);
+            if width == 0 {
+                bytes.push((TAG_TSTR_REF << TAG_WIDTH) | key as u8);
+            } else {
+                let payload = match width {
+                    1 => posint::BITS_8,
+                    2 => posint::BITS_16,
+                    _ => posint::BITS_32,
+                };
+                bytes.push((TAG_TSTR_REF << TAG_WIDTH) | payload);
+                bytes.extend_from_slice(&key.to_le_bytes()[..width]);
+            }
+            return;
+        }
+
         let value = value.as_bytes();
         let value_len = value.len();
 
