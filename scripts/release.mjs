@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const npmName = '@doxsync/core';
 const npmRegistry = 'https://registry.npmjs.org/';
-const versionFiles = ['doxsync-rs/Cargo.toml', 'doxsync-rs/Cargo.lock', 'doxsync-js/package.json'];
+const versionFiles = ['doxsync-rs/Cargo.toml', 'doxsync-rs/Cargo.lock', 'doxsync-js/package.json', 'doxsync-js/package-lock.json'];
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const versions = args.filter(arg => arg !== '--dry-run');
@@ -106,6 +106,11 @@ async function prepare(directory) {
   writeFileSync(lockPath, replaceVersion(readFileSync(lockPath, 'utf8'), /(^\[\[package\]\]\s*\nname = "doxsync"\s*\nversion = )"[^"]+"/gm, 'Cargo lock package'));
   manifest.version = version;
   writeFileSync(jsonPath, JSON.stringify(manifest, null, 2) + '\n');
+  const npmLockPath = join(directory, versionFiles[3]);
+  const npmLock = JSON.parse(readFileSync(npmLockPath, 'utf8'));
+  npmLock.version = version;
+  npmLock.packages[''].version = version;
+  writeFileSync(npmLockPath, JSON.stringify(npmLock, null, 2) + '\n');
 }
 function validate(directory) {
   const rust = join(directory, 'doxsync-rs');
@@ -116,14 +121,16 @@ function validate(directory) {
   for (const license of ['LICENSE-MIT', 'LICENSE-APACHE']) {
     check(crateFiles.has(license), `Rust package is missing ${license}`);
   }
+  run('npm', ['ci'], js);
   run('npm', ['run', 'build'], js);
   run('node', ['examples/node.mjs'], js);
   const info = JSON.parse(run('npm', ['pack', '--ignore-scripts', '--json'], js, true));
   check(info.length === 1 && info[0].name === npmName && info[0].version === version, 'Unexpected npm package identity');
   const files = new Set(info[0].files.map(file => file.path));
-  for (const file of ['dist/index.js', 'dist/node.js', 'dist/runtime.js', 'dist/index.d.ts', 'dist/wasm/doxsync.js', 'dist/wasm/doxsync_bg.wasm', 'LICENSE-MIT', 'LICENSE-APACHE']) {
+  for (const file of ['dist/index.js', 'dist/node.js', 'dist/index.d.ts', 'dist/node.d.ts', 'dist/runtime.d.ts', 'dist/types.d.ts', 'dist/wasm/doxsync.js', 'dist/wasm/doxsync_bg.wasm', 'LICENSE-MIT', 'LICENSE-APACHE']) {
     check(files.has(file), `npm tarball is missing ${file}`);
   }
+  check([...files].some(file => /^dist\/runtime-[\w-]+\.js$/.test(file)), 'npm tarball is missing the Vite runtime chunk');
   tarball = join(js, info[0].filename);
   const smoke = mkdtempSync(join(tmpdir(), 'doxsync-install-'));
   try {
@@ -149,7 +156,8 @@ function validate(directory) {
 
 try {
   check(versions.length === 1 && args.length === (dryRun ? 2 : 1) && parsedVersion, 'Usage: node scripts/release.mjs X.Y.Z[-PRERELEASE] [--dry-run]');
-  check(Number(process.versions.node.split('.')[0]) >= 22, 'Node.js 22+ is required');
+  const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
+  check(nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 12), 'Node.js 22.12+ is required for Vite builds');
   for (const tool of ['git', 'cargo', 'npm', 'wasm-pack']) run(tool, ['--version']);
   check(run('git', ['status', '--porcelain', '--untracked-files=all'], root, true) === '', 'Commit or stash all changes before releasing');
   branch = run('git', ['symbolic-ref', '--short', 'HEAD'], root, true);
