@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { cp, mkdir, rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const root = new URL("../", import.meta.url);
@@ -26,4 +26,3 @@ await rm(new URL("wasm/package.json", dist), { force: true });
 // wasm-pack ignores its entire output directory. npm would honor that nested
 // ignore file even though the outer package explicitly includes dist/.
 await rm(new URL("wasm/.gitignore", dist), { force: true });
-await cp(new URL("src/", root), dist, { recursive: true });

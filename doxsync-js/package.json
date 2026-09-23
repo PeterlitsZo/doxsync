@@ -23,7 +23,7 @@
     "LICENSE-APACHE"
   ],
   "scripts": {
-    "build": "node scripts/build.mjs",
+    "build": "node scripts/build-wasm.mjs && vite build",
     "prepack": "npm run build"
   },
   "license": "MIT OR Apache-2.0",
@@ -31,5 +31,11 @@
     "type": "git",
     "url": "git+https://github.com/PeterlitsZo/doxsync.git",
     "directory": "doxsync-js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.0",
+    "vite-plugin-dts": "^5.1.1"
   }
 }

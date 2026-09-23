@@ -6,18 +6,19 @@ state. JavaScript provides loading and a small synchronous API.
 
 ## Build from this repository
 
-Install Rust, Node.js 22+, and `wasm-pack`, then run:
+Install Rust, Node.js 22.12+ (or 24+), and `wasm-pack`, then run:
 
 ```sh
 rustup target add wasm32-unknown-unknown
 cd doxsync-js
+npm ci
 npm run build
 node examples/node.mjs
 ```
 
 `npm run build` runs `wasm-pack` in release mode with the locked Cargo
-dependencies and the `wasm` feature, then copies the JS wrapper and declarations
-into `dist/`. There are no npm runtime dependencies. To create a local npm
+dependencies and the `wasm` feature, then builds the TypeScript wrapper with Vite in library mode.
+`vite-plugin-dts` generates type declarations in `dist/`. There are no npm runtime dependencies. To create a local npm
 tarball, run `npm pack`; it builds first and includes the WASM artifact.
 Installing that tarball does not require Rust or wasm-pack.
 
