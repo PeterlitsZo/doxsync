@@ -10,6 +10,8 @@ pub struct Error {
     metadata: BTreeMap<&'static str, String>,
 }
 
+impl std::error::Error for Error {}
+
 impl Error {
     pub fn new(kind: ErrorKind, message: &'static str) -> Self {
         Self {
