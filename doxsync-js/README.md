@@ -37,10 +37,10 @@ also generate the JS glue required to load it.
 After installing the package from the local tarball:
 
 ```js
-import { init, Producer, Consumer } from "@doxsync/core";
+import { init, Producer, Consumer, supportedProtocols } from "@doxsync/core";
 
 await init();
-const producer = new Producer({ count: 1n, ratio: 0.5 }, [1]);
+const producer = new Producer({ count: 1n, ratio: 0.5 }, supportedProtocols());
 const consumer = new Consumer();
 
 try {
@@ -77,7 +77,8 @@ provide garbage-collection cleanup, but its timing is not deterministic.
 
 ## WASM initialization
 
-Call and await `init()` before creating either class. Initialization is the
+Call and await `init()` before creating either class or calling
+`supportedProtocols()`. Initialization is the
 only asynchronous operation. Concurrent calls share the first call's promise
 and source; successful initialization is reused, and failed initialization
 can be retried.
@@ -151,11 +152,23 @@ try {
 }
 ```
 
-The JS package exposes only `init`, `Producer`, and `Consumer` at runtime.
+The JS package exposes `init`, `supportedProtocols`, `Producer`, and `Consumer`
+at runtime.
 Rust's lower-level Document, Value, and Message APIs remain internal to this
 binding, and the wire protocol is shared with native Rust.
 
 ### Protocol negotiation
+
+Call `supportedProtocols()` after `await init()` to get all protocol versions
+supported by the local build, currently `[1]`. Each call returns an independent
+ordinary `number[]`; modifying it does not affect subsequent calls or the engine.
+No producer or consumer instance is needed. Rust callers can use
+`doxsync::supported_protocols() -> &'static [u32]` without initialization.
+
+For peers running in separate processes, have the consumer advertise its list
+and pass that received list to the producer. The examples above use the local
+list because both peers share the same build. This query reports supported
+versions, not the version negotiated for an individual stream.
 
 The second `Producer` constructor argument is required: pass an array of protocol
 versions supported by the consumer, such as `[1]`. Versions must be integers in

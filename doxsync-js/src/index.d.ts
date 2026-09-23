@@ -22,12 +22,19 @@ export interface DoxsyncError extends Error {
 }
 
 /**
- * Initialize once before constructing Producer or Consumer.
+ * Initialize once before constructing Producer or Consumer or calling supportedProtocols.
  * Defaults to the packaged WASM. Concurrent calls share the first call's source
  * and promise; failures can be retried. Later successful calls are no-ops.
  * Strings are URLs, not filesystem paths; Node also accepts file: URLs.
  */
 export function init(source?: InitSource): Promise<void>;
+
+/**
+ * Returns all protocol versions supported by this build, currently [1].
+ * Requires await init(). Each call returns an independent ordinary array.
+ * Consumers can advertise this list to producers for protocol negotiation.
+ */
+export function supportedProtocols(): number[];
 
 export class Producer {
   #private;

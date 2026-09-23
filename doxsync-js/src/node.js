@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { initialize } from "./runtime.js";
 
-export { Producer, Consumer } from "./runtime.js";
+export { Producer, Consumer, supportedProtocols } from "./runtime.js";
 
 export function init(source) {
   return initialize(() => {

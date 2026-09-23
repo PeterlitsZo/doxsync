@@ -1,6 +1,7 @@
 import initWasm, {
   Producer as WasmProducer,
   Consumer as WasmConsumer,
+  supportedProtocols as wasmSupportedProtocols,
 } from "./wasm/doxsync.js";
 
 let initialization;
@@ -22,8 +23,13 @@ export function initialize(loadSource) {
 
 function requireInitialized() {
   if (!initialized) {
-    throw new Error("Call and await init() before creating a doxsync object");
+    throw new Error("Call and await init() before using the doxsync API");
   }
+}
+
+export function supportedProtocols() {
+  requireInitialized();
+  return wasmSupportedProtocols();
 }
 
 export class Producer {

@@ -1,7 +1,7 @@
-import { init, Producer, Consumer } from "@doxsync/core";
+import { init, Producer, Consumer, supportedProtocols } from "@doxsync/core";
 
 await init();
-const producer = new Producer({ count: 1n, data: new Uint8Array([1, 2, 3]) }, [1]);
+const producer = new Producer({ count: 1n, data: new Uint8Array([1, 2, 3]) }, supportedProtocols());
 const consumer = new Consumer();
 
 try {

@@ -21,6 +21,13 @@ pub use message::{Message, PackedMessage};
 pub use producer::Producer;
 pub use value::{Value, ValueKind};
 
+/// Returns all protocol versions supported by this build, currently `[1]`.
+///
+/// Consumers can advertise this list to producers for protocol negotiation.
+pub fn supported_protocols() -> &'static [u32] {
+    protocol::consts::SUPPORTED_PROTOCOLS
+}
+
 pub(crate) use state::{ConsumerState, ProducerState};
 pub(crate) use value::ValueInner;
 

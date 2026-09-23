@@ -7,6 +7,14 @@ use crate::{Document, Error, ErrorKind, PackedMessage};
 
 mod value;
 
+#[wasm_bindgen(js_name = supportedProtocols)]
+pub fn supported_protocols() -> Array {
+    crate::supported_protocols()
+        .iter()
+        .map(|&version| JsValue::from(version))
+        .collect()
+}
+
 fn js_error(error: Error) -> JsValue {
     let result = js_sys::Error::new(&error.to_string());
     let kind = match error.kind() {
