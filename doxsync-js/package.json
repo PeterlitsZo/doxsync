@@ -1,6 +1,6 @@
 {
   "name": "@doxsync/core",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "description": "JavaScript bindings for the doxsync Rust synchronization engine",
   "type": "module",
   "engines": {
