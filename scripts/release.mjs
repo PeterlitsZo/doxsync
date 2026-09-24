@@ -9,6 +9,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const npmName = '@doxsync/core';
 const npmRegistry = 'https://registry.npmjs.org/';
 const versionFiles = ['doxsync-rs/Cargo.toml', 'doxsync-rs/Cargo.lock', 'doxsync-js/package.json', 'doxsync-js/package-lock.json'];
+const releaseFiles = [...versionFiles, 'WIRE.md'];
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const versions = args.filter(arg => arg !== '--dry-run');
@@ -159,7 +160,7 @@ try {
   const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
   check(nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 12), 'Node.js 22.12+ is required for Vite builds');
   for (const tool of ['git', 'cargo', 'npm', 'wasm-pack']) run(tool, ['--version']);
-  check(run('git', ['status', '--porcelain', '--untracked-files=all'], root, true) === '', 'Commit or stash all changes before releasing');
+  check(run('git', ['status', '--porcelain', '--untracked-files=all', '--', '.', ':(top,exclude)WIRE.md'], root, true) === '', 'Commit or stash all changes except WIRE.md before releasing');
   branch = run('git', ['symbolic-ref', '--short', 'HEAD'], root, true);
   run('git', ['remote', 'get-url', 'origin'], root, true);
   await ensureUnreleased(version);
@@ -172,6 +173,9 @@ try {
     directory = join(temporary, 'source');
     mkdirSync(directory);
     run('tar', ['-xf', archive, '-C', directory]);
+    const wire = join(root, 'WIRE.md');
+    if (existsSync(wire)) writeFileSync(join(directory, 'WIRE.md'), readFileSync(wire));
+    else rmSync(join(directory, 'WIRE.md'), { force: true });
   } else {
     saved = versionFiles.map(file => readFileSync(join(root, file)));
     changed = true;
@@ -182,11 +186,11 @@ try {
   if (dryRun) {
     console.log(`Dry run passed for v${version}. No commit, tag, push or upload was performed.`);
   } else {
-    const expected = new Set(versionFiles);
+    const expected = new Set(releaseFiles);
     const changedFiles = run('git', ['diff', '--name-only'], root, true).split('\n').filter(Boolean);
     check(changedFiles.every(file => expected.has(file)), 'Validation unexpectedly changed other tracked files');
     stage = 'release commit';
-    run('git', ['add', '--', ...versionFiles]);
+    run('git', ['add', '--', ...releaseFiles]);
     run('git', ['commit', '--allow-empty', '-m', `chore: Release v${version}.`]);
     committed = true;
     stage = 'release tag';
