@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 
 use blake3::Hash;
 
-use crate::{Error, ErrorKind, Result};
+use crate::{Decimal, Error, ErrorKind, Result};
 
 mod macros;
 
@@ -13,6 +13,7 @@ const TAG_TSTR: u8 = 0x30;
 const TAG_ARRAY: u8 = 0x40;
 const TAG_MAP: u8 = 0x50;
 const TAG_FLOAT: u8 = 0x70;
+const TAG_DECIMAL: u8 = 0x90;
 const TAG_FALSE: u8 = TAG_FLOAT | 0x04;
 const TAG_TRUE: u8 = TAG_FLOAT | 0x05;
 const TAG_NULL: u8 = TAG_FLOAT | 0x06;
@@ -46,6 +47,8 @@ pub(crate) enum ValueInner {
     Bool { inner: bool },
     /// A floating-point value.
     Float { inner: f64 },
+    /// A decimal value whose scale is part of its identity.
+    Decimal { inner: Decimal },
     /// A binary string value.
     BStr { inner: Arc<Vec<u8>> },
     /// A text string value.
@@ -96,6 +99,15 @@ impl Value {
         Ok(Value::inner_float(value))
     }
 
+    /// Creates an exact decimal value, preserving its scale.
+    ///
+    /// Unlike numeric Decimal equality, `1.20` and `1.2` are different values.
+    /// Negative zero becomes positive zero with the same scale. Protocol 1
+    /// transmits this value as a string; protocol 2 retains its decimal type.
+    pub fn decimal(value: Decimal) -> Result<Self> {
+        Ok(Value::inner_decimal(value))
+    }
+
     /// Creates a binary string value.
     pub fn bstr<T>(value: T) -> Result<Self>
     where
@@ -132,6 +144,7 @@ impl Value {
             ValueInner::Null => ValueKind::Null,
             ValueInner::Bool { .. } => ValueKind::Bool,
             ValueInner::Float { .. } => ValueKind::Float,
+            ValueInner::Decimal { .. } => ValueKind::Decimal,
             ValueInner::BStr { .. } => ValueKind::BStr,
             ValueInner::TStr { .. } => ValueKind::TStr,
             ValueInner::Array { .. } => ValueKind::Array,
@@ -163,6 +176,14 @@ impl Value {
     pub fn as_float(&self) -> Option<f64> {
         match &*self.inner {
             ValueInner::Float { inner } => Some(*inner),
+            _ => None,
+        }
+    }
+
+    /// Returns the decimal with its original scale.
+    pub fn as_decimal(&self) -> Option<Decimal> {
+        match &*self.inner {
+            ValueInner::Decimal { inner } => Some(*inner),
             _ => None,
         }
     }
@@ -243,6 +264,23 @@ impl Value {
             Err(Error::new(
                 ErrorKind::UnexpectedType,
                 "expected a float value",
+            ))
+        }
+    }
+
+    /// Modifies a copy of the decimal, preserving scale and normalizing zero's sign.
+    pub fn as_decimal_and_modify<F>(&self, f: F) -> Result<Self>
+    where
+        F: FnOnce(&mut Decimal) -> Result<()>,
+    {
+        if let ValueInner::Decimal { inner } = &*self.inner {
+            let mut inner = *inner;
+            f(&mut inner)?;
+            Value::decimal(inner)
+        } else {
+            Err(Error::new(
+                ErrorKind::UnexpectedType,
+                "expected a decimal value",
             ))
         }
     }
@@ -372,6 +410,20 @@ impl Value {
         }
     }
 
+    pub(crate) fn inner_decimal(mut inner: Decimal) -> Self {
+        if inner.is_zero() {
+            inner.set_sign_negative(false);
+        }
+        let mut hash = blake3::Hasher::new();
+        hash.update(&[TAG_DECIMAL, u8::from(inner.is_sign_negative())]);
+        hash.update(&inner.scale().to_le_bytes());
+        hash.update(&inner.mantissa().unsigned_abs().to_le_bytes());
+        Value {
+            hash: hash.finalize(),
+            inner: Arc::new(ValueInner::Decimal { inner }),
+        }
+    }
+
     pub(crate) fn inner_bstr(inner: Vec<u8>) -> Self {
         let mut hash = blake3::Hasher::new();
         hash.update(&[TAG_BSTR]);
@@ -440,6 +492,7 @@ impl Debug for Value {
             ValueInner::Null => write!(f, "Null"),
             ValueInner::Bool { inner } => write!(f, "Bool({})", inner),
             ValueInner::Float { inner } => write!(f, "Float({})", inner),
+            ValueInner::Decimal { inner } => write!(f, "Decimal({})", inner),
             ValueInner::BStr { inner } => write!(f, "BStr({:?})", inner),
             ValueInner::TStr { inner } => write!(f, "TStr({:?})", inner),
             ValueInner::Array { inner } => write!(f, "Array({:?})", inner),
@@ -454,6 +507,7 @@ pub enum ValueKind {
     Null,
     Bool,
     Float,
+    Decimal,
     BStr,
     TStr,
     Array,

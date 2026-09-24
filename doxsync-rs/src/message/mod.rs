@@ -3,6 +3,7 @@ mod packed;
 pub use packed::PackedMessage;
 
 use crate::patch::Action;
+use crate::protocol::{ProjectedMessage, ProtocolProjection};
 
 use crate::{
     Result,
@@ -29,6 +30,14 @@ impl Message {
         packed::PackedMessageDecoder::default().decode(packed, state_txn)
     }
 
+    pub(crate) fn encode(&self, state_txn: &mut ProducerStateTxn) -> Result<PackedMessage> {
+        ProtocolProjection::new(state_txn.protocol())?
+            .message(self)
+            .encode(state_txn)
+    }
+}
+
+impl ProjectedMessage<'_> {
     pub(crate) fn encode(&self, state_txn: &mut ProducerStateTxn) -> Result<PackedMessage> {
         packed::PackedMessageEncoder::default().encode(self, state_txn)
     }

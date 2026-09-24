@@ -1,7 +1,8 @@
 /// Constructs a [`Value`](crate::Value) using JSON-like syntax.
 ///
 /// The macro supports `null`, booleans, all Rust integer primitives, `f32`,
-/// `f64`, UTF-8 strings, byte strings, nested arrays, and maps with string
+/// `f64`, [`Decimal`](crate::Decimal) (owned or borrowed), UTF-8 strings,
+/// byte strings, nested arrays, and maps with string
 /// literal keys. A value position may also contain an expression yielding a
 /// supported Rust value or an existing [`Value`](crate::Value).
 ///

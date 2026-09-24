@@ -52,7 +52,8 @@ pub(super) struct CostSavepoint {
 }
 
 /// Exact wire length for an incrementally selected operation prefix. The caller
-/// owns commit/rollback of the borrowed transaction.
+/// owns commit/rollback of the borrowed transaction. The planner supplies actions
+/// derived exclusively from projected documents; this layer never converts values.
 pub(super) struct CostSession<'s> {
     pools: PoolPreparation<'s>,
     values: ValueCostCache,

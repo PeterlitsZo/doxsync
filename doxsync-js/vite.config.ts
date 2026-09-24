@@ -22,7 +22,7 @@ export default defineConfig({
       fileName: (_format, entryName) => `${entryName}.js`,
     },
     rolldownOptions: {
-      external: ["node:fs/promises", "./wasm/doxsync.js"],
+      external: ["node:fs/promises", "./wasm/doxsync.js", "decimal.js"],
       output: {
         // Keep relative WASM imports next to the two public entry points.
         chunkFileNames: "[name]-[hash].js",

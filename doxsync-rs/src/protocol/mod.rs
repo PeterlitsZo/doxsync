@@ -1,10 +1,13 @@
-//! Shared wire rules and pool preparation, independent of messages and diff planning.
+//! Protocol representation policy, shared wire rules, and pool preparation.
 
 pub(crate) mod consts;
+pub(crate) mod decimal;
 pub(crate) mod layout;
 mod preparation;
+mod projection;
 
 pub(crate) use preparation::{PoolPreparation, PoolSavepoint, PreparedPathSegment};
+pub(crate) use projection::{ProjectedDocument, ProjectedMessage, ProtocolProjection};
 
 use std::sync::Arc;
 

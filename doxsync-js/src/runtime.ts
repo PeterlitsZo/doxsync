@@ -1,4 +1,5 @@
 import type { InitSource, SyncValue } from "./types.js";
+import { decimalFromString, decimalToString } from "./decimal.js";
 import initWasm, {
   Producer as WasmProducer,
   Consumer as WasmConsumer,
@@ -29,7 +30,7 @@ function requireInitialized() {
 }
 
 /**
- * Returns all protocol versions supported by this build, currently [1].
+ * Returns all protocol versions supported by this build, currently [1, 2].
  * Requires await init(). Each call returns an independent ordinary array.
  * Consumers can advertise this list to producers for protocol negotiation.
  */
@@ -44,12 +45,13 @@ export class Producer {
   /**
    * Copies the value into WASM and selects the highest common protocol version.
    * protocols lists the consumer's supported versions as u32 integers.
-   * Currently only 1 is supported. Missing, invalid, empty, or incompatible
+   * Versions 1 and 2 are supported. Missing, invalid, empty, or incompatible
    * lists throw InvalidData errors. Order and duplicates do not matter.
+   * Protocol 1 transmits Decimal values as strings; protocol 2 preserves the type.
    */
   constructor(value: SyncValue, protocols: readonly number[]) {
     requireInitialized();
-    this.#handle = new WasmProducer(value, protocols);
+    this.#handle = new WasmProducer(value, protocols, decimalToString);
   }
 
   #live() {
@@ -93,16 +95,18 @@ export class Consumer {
   }
 
   /**
-   * Applies one complete message. The first message must declare protocol 1.
+   * Applies one complete message. The first message must declare protocol 1 or 2.
    * Failures leave the document, pools, and protocol state intact.
    */
   consumeDiff(bytes: Uint8Array): void {
     this.#live().consumeDiff(bytes);
   }
 
-  /** Returns an independent copy, or undefined before the first snapshot. */
+  /** Returns an independent copy, or undefined before the first snapshot.
+   * Protocol 2 decimals become decimal.js instances; their original scale is lost.
+   */
   document(): SyncValue | undefined {
-    return this.#live().document();
+    return this.#live().document(decimalFromString);
   }
 
   /** Release WASM resources. Safe to call repeatedly. */

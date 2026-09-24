@@ -11,6 +11,7 @@ let loading = false;
 const initialDocument = () => ({
   title: "doxsync playground",
   visitors: 12n,
+  price: new bindings.Decimal("12.34"),
   online: true,
   settings: { theme: "light", volume: 60 },
   tags: ["rust", "wasm"],
@@ -28,6 +29,7 @@ const delayValue = () => {
 // suffix preserves bigint's type instead of presenting it as a JSON string.
 function format(value, depth = 0) {
   if (typeof value === "bigint") return `${value}n`;
+  if (bindings.Decimal.isDecimal(value)) return `Decimal("${value.toFixed()}")`;
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   const array = Array.isArray(value);
   const entries = array ? value : Object.keys(value).sort();
@@ -219,6 +221,7 @@ function send(summary) {
 }
 
 const mutations = [
+  (doc) => { doc.price = doc.price.plus("0.01"); return `price → ${doc.price.toFixed(2)}`; },
   (doc) => { const delta = BigInt(number(1, 5)); doc.visitors += delta; return `visitors increased by ${delta}`; },
   (doc) => { doc.online = !doc.online; return `online → ${doc.online}`; },
   (doc) => { doc.settings.theme = pick(["light", "dark", "system"].filter((value) => value !== doc.settings.theme)); return `settings.theme → ${doc.settings.theme}`; },
@@ -246,7 +249,13 @@ function mutate() {
   try {
     // Producer owns a copy. Keep this display model in step with successfully
     // accepted replacements; no JS implementation of the diff algorithm.
-    const next = structuredClone(state.document);
+    // Copy this demo's containers explicitly: structuredClone cannot copy Decimal.
+    const next = {
+      ...state.document,
+      settings: { ...state.document.settings },
+      tags: [...state.document.tags],
+      price: new bindings.Decimal(state.document.price),
+    };
     const summary = pick(mutations)(next);
     state.producer.replace(next);
     state.document = next;

@@ -30,6 +30,7 @@ pub(crate) struct ProducerStateSavepoint {
 }
 
 pub(crate) struct ProducerStateTxn {
+    protocol: u32,
     pending_protocol: Option<u32>,
     pub(super) path_pool: BTreeMap<u32, Arc<Path>>,
     pub(super) path_pool_bitmap: Bitmap,
@@ -46,6 +47,7 @@ pub(crate) struct ProducerStateTxn {
 impl ProducerStateTxn {
     pub(super) fn new(state: ProducerState) -> Self {
         let ProducerState {
+            protocol,
             pending_protocol,
             path_pool,
             path_pool_bitmap,
@@ -58,6 +60,7 @@ impl ProducerStateTxn {
         } = state;
 
         Self {
+            protocol,
             pending_protocol,
             path_pool,
             path_pool_bitmap,
@@ -73,6 +76,7 @@ impl ProducerStateTxn {
 
     pub(crate) fn commit(self) -> ProducerState {
         let Self {
+            protocol,
             pending_protocol,
             path_pool,
             path_pool_bitmap,
@@ -86,6 +90,7 @@ impl ProducerStateTxn {
         } = self;
 
         ProducerState {
+            protocol,
             pending_protocol,
             path_pool,
             path_pool_bitmap,
@@ -102,6 +107,7 @@ impl ProducerStateTxn {
         self.rollback_all();
 
         let Self {
+            protocol,
             pending_protocol,
             path_pool,
             path_pool_bitmap,
@@ -115,6 +121,7 @@ impl ProducerStateTxn {
         } = self;
 
         ProducerState {
+            protocol,
             pending_protocol,
             path_pool,
             path_pool_bitmap,
@@ -154,6 +161,10 @@ impl ProducerStateTxn {
             string_pool_lru: self.string_pool_lru.savepoint(),
             path_pool_lru: self.path_pool_lru.savepoint(),
         }
+    }
+
+    pub(crate) fn protocol(&self) -> u32 {
+        self.protocol
     }
 
     pub(crate) fn pending_protocol(&self) -> Option<u32> {

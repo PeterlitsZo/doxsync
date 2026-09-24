@@ -1,10 +1,10 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use js_sys::{Array, JsString, Object, Reflect, Set, Uint8Array};
+use js_sys::{Array, Function, JsString, Object, Reflect, Set, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
 
 use super::{invalid, js_error, unexpected};
-use crate::{Value, ValueInner};
+use crate::{Decimal, Value, ValueInner};
 
 fn text(value: &JsValue) -> Result<String, JsValue> {
     let value = value
@@ -34,11 +34,15 @@ fn data_value(descriptor: &JsValue) -> Result<JsValue, JsValue> {
     Reflect::get(descriptor, &"value".into())
 }
 
-pub(super) fn from_js(value: &JsValue) -> Result<Value, JsValue> {
-    from_js_inner(value, &Set::new(&JsValue::UNDEFINED))
+pub(super) fn from_js(value: &JsValue, decimal_to_string: &Function) -> Result<Value, JsValue> {
+    from_js_inner(value, &Set::new(&JsValue::UNDEFINED), decimal_to_string)
 }
 
-fn from_js_inner(value: &JsValue, ancestors: &Set) -> Result<Value, JsValue> {
+fn from_js_inner(
+    value: &JsValue,
+    ancestors: &Set,
+    decimal_to_string: &Function,
+) -> Result<Value, JsValue> {
     if value.is_null() {
         return Value::null().map_err(js_error);
     }
@@ -66,18 +70,22 @@ fn from_js_inner(value: &JsValue, ancestors: &Set) -> Result<Value, JsValue> {
         return Err(invalid("cyclic documents are not supported"));
     }
     ancestors.add(value);
-    let result = container_from_js(value, ancestors);
+    let result = container_from_js(value, ancestors, decimal_to_string);
     ancestors.delete(value);
     result
 }
 
-fn container_from_js(value: &JsValue, ancestors: &Set) -> Result<Value, JsValue> {
+fn container_from_js(
+    value: &JsValue,
+    ancestors: &Set,
+    decimal_to_string: &Function,
+) -> Result<Value, JsValue> {
     if Array::is_array(value) {
         let array = value.unchecked_ref::<Array>();
         let mut items = Vec::new();
         for index in 0..array.length() {
             let item = data_value(&descriptor(value, &index.to_string().into())?)?;
-            items.push(from_js_inner(&item, ancestors)?);
+            items.push(from_js_inner(&item, ancestors, decimal_to_string)?);
         }
         return Value::array(items).map_err(js_error);
     }
@@ -85,7 +93,17 @@ fn container_from_js(value: &JsValue, ancestors: &Set) -> Result<Value, JsValue>
     let prototype = Reflect::get_prototype_of(value)?;
     let object_prototype = Object::get_prototype_of(&Object::new());
     if !prototype.is_null() && prototype != object_prototype {
-        return Err(unexpected("expected a plain object, array, or Uint8Array"));
+        // Check decimals only for class instances, leaving plain-object property
+        // validation intact (including getters and enumerable symbol keys).
+        let decimal = decimal_to_string.call1(&JsValue::UNDEFINED, value)?;
+        if !decimal.is_undefined() {
+            let decimal = Decimal::from_str_exact(&text(&decimal)?)
+                .map_err(|_| invalid("decimal outside the supported coefficient or scale range"))?;
+            return Value::decimal(decimal).map_err(js_error);
+        }
+        return Err(unexpected(
+            "expected a plain object, array, Uint8Array, or Decimal",
+        ));
     }
 
     let mut entries = BTreeMap::new();
@@ -98,25 +116,28 @@ fn container_from_js(value: &JsValue, ancestors: &Set) -> Result<Value, JsValue>
             continue;
         }
         let key = Arc::new(text(&key)?);
-        let item = from_js_inner(&data_value(&property)?, ancestors)?;
+        let item = from_js_inner(&data_value(&property)?, ancestors, decimal_to_string)?;
         entries.insert(key, item);
     }
     Value::map(entries).map_err(js_error)
 }
 
-pub(super) fn to_js(value: &Value) -> Result<JsValue, JsValue> {
+pub(super) fn to_js(value: &Value, decimal_from_string: &Function) -> Result<JsValue, JsValue> {
     match value.inner() {
         ValueInner::Null => Ok(JsValue::NULL),
         ValueInner::Bool { inner } => Ok(JsValue::from_bool(*inner)),
         ValueInner::PosInt { inner } => Ok(JsValue::from(*inner)),
         ValueInner::NegInt { inner } => Ok(JsValue::from(-(*inner as i128) - 1)),
         ValueInner::Float { inner } => Ok(JsValue::from_f64(*inner)),
+        ValueInner::Decimal { inner } => {
+            decimal_from_string.call1(&JsValue::UNDEFINED, &inner.to_string().into())
+        }
         ValueInner::TStr { inner } => Ok(JsValue::from_str(inner)),
         ValueInner::BStr { inner } => Ok(Uint8Array::from(inner.as_slice()).into()),
         ValueInner::Array { inner } => {
             let array = Array::new();
             for item in inner {
-                array.push(&to_js(item)?);
+                array.push(&to_js(item, decimal_from_string)?);
             }
             Ok(array.into())
         }
@@ -125,7 +146,11 @@ pub(super) fn to_js(value: &Value) -> Result<JsValue, JsValue> {
             for (key, item) in inner {
                 // Define data properties so even "__proto__" remains a map key.
                 let property = Object::new();
-                Reflect::set(&property, &"value".into(), &to_js(item)?)?;
+                Reflect::set(
+                    &property,
+                    &"value".into(),
+                    &to_js(item, decimal_from_string)?,
+                )?;
                 for flag in ["enumerable", "writable", "configurable"] {
                     Reflect::set(&property, &flag.into(), &JsValue::TRUE)?;
                 }

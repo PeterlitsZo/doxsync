@@ -4,7 +4,9 @@ use crate::patch::Path;
 use crate::state::{Bitmap, Lru, ProducerStateTxn};
 
 pub(crate) struct ProducerState {
+    pub(crate) protocol: u32,
     pub(crate) pending_protocol: Option<u32>,
+
     pub(super) path_pool: BTreeMap<u32, Arc<Path>>,
     pub(super) path_pool_bitmap: Bitmap,
     pub(super) path_pool_reverse: BTreeMap<Arc<Path>, u32>,
@@ -21,7 +23,9 @@ impl Default for ProducerState {
         let default_string_pool_size = super::STRING_POOL_CAPACITY;
         let default_path_pool_size = super::PATH_POOL_CAPACITY;
         Self {
+            protocol: 1,
             pending_protocol: Some(1),
+
             path_pool: BTreeMap::new(),
             path_pool_bitmap: Bitmap::new(default_path_pool_size),
             path_pool_reverse: BTreeMap::new(),

@@ -1,5 +1,6 @@
 import type { InitSource } from "./types.js";
 export type { SyncValue, InitSource, DoxsyncError } from "./types.js";
+export { Decimal } from "decimal.js";
 
 import { readFile } from "node:fs/promises";
 import { initialize } from "./runtime.js";

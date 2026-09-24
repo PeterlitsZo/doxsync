@@ -1,22 +1,27 @@
 use crate::{
-    Document, Result, Value, ValueKind,
+    Result, Value, ValueKind,
     patch::{Action, Path, PathSegment},
+    protocol::ProjectedDocument,
 };
 
 use super::cost::CostSession;
 
 pub(super) struct Differ<'d, 'c, 's> {
-    old: &'d Document,
+    old: &'d ProjectedDocument,
     cost: &'c mut CostSession<'s>,
 }
 
 impl<'d, 'c, 's> Differ<'d, 'c, 's> {
-    pub(super) fn new(old: &'d Document, cost: &'c mut CostSession<'s>) -> Self {
+    pub(super) fn new(old: &'d ProjectedDocument, cost: &'c mut CostSession<'s>) -> Self {
         Self { old, cost }
     }
 
-    pub(super) fn diff(&mut self, new: &Document) -> Result<Vec<Action>> {
-        self.diff_value(Path::empty(), Some(&self.old.value()), &new.value())
+    pub(super) fn diff(&mut self, new: &ProjectedDocument) -> Result<Vec<Action>> {
+        self.diff_value(
+            Path::empty(),
+            Some(&self.old.document().value()),
+            &new.document().value(),
+        )
     }
 
     /// Appends the cheaper encodable action, preferring the direct action on ties.
@@ -67,13 +72,18 @@ impl<'d, 'c, 's> Differ<'d, 'c, 's> {
                 value: new_value.clone(),
             }
         };
-        let copy = self.old.index().get(&new_value.hash()).map(|entry| {
-            debug_assert_eq!(&entry.value, new_value);
-            Action::Copy {
-                path,
-                from: entry.path.clone(),
-            }
-        });
+        let copy = self
+            .old
+            .document()
+            .index()
+            .get(&new_value.hash())
+            .map(|entry| {
+                debug_assert_eq!(&entry.value, new_value);
+                Action::Copy {
+                    path,
+                    from: entry.path.clone(),
+                }
+            });
         Ok(vec![self.choose_action(action, copy)?])
     }
 
@@ -152,7 +162,7 @@ impl<'d, 'c, 's> Differ<'d, 'c, 's> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{ProducerState, value};
+    use crate::{Document, ProducerState, protocol::ProtocolProjection, value};
 
     use super::*;
 
@@ -160,9 +170,12 @@ mod tests {
     fn assert_diff_plan(old: &Document, new: &Document, expected: Vec<Action>) {
         let state = ProducerState::new();
         let mut state_txn = state.txn();
+        let projection = ProtocolProjection::new(state_txn.protocol()).unwrap();
+        let old = projection.document(old.clone());
+        let new = projection.document(new.clone());
         let mut cost = CostSession::new(&mut state_txn);
-        let mut differ = Differ::new(old, &mut cost);
-        let diff = differ.diff(new).unwrap();
+        let mut differ = Differ::new(&old, &mut cost);
+        let diff = differ.diff(&new).unwrap();
         assert_eq!(diff, expected);
     }
 

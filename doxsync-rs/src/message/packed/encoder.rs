@@ -1,10 +1,9 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use super::PackedMessage;
-use crate::message::Message;
 use crate::patch::{Action, Path};
 use crate::protocol::{
-    PoolPreparation, PreparedPathSegment,
+    PoolPreparation, PreparedPathSegment, ProjectedMessage,
     consts::*,
     layout::{action_tag, payload_width, tstr_ref_key},
 };
@@ -27,9 +26,10 @@ impl Default for PackedMessageEncoder {
 impl PackedMessageEncoder {
     pub(in crate::message) fn encode(
         &self,
-        message: &Message,
+        message: &ProjectedMessage<'_>,
         state_txn: &mut ProducerStateTxn,
     ) -> Result<PackedMessage> {
+        message.ensure_protocol(state_txn.protocol())?;
         let mut internal = PackedMessageEncoderInternal {
             actions: message.actions(),
             state_txn,
@@ -169,6 +169,7 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
             ValueInner::Null => self.pack_null(bytes),
             ValueInner::Bool { inner } => self.pack_bool(bytes, *inner),
             ValueInner::Float { inner } => self.pack_float(bytes, *inner),
+            ValueInner::Decimal { inner } => crate::protocol::decimal::encode(bytes, *inner),
             ValueInner::BStr { inner } => self.pack_bstr(bytes, inner),
             ValueInner::TStr { inner } => self.pack_tstr(bytes, inner),
             ValueInner::Array { inner } => self.pack_array(bytes, inner),

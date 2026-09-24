@@ -30,6 +30,7 @@ pub(crate) fn value_base_cost(value: &Value) -> usize {
         ValueInner::NegInt { inner } => 1 + payload_width(*inner, negint::INLINE),
         ValueInner::Null | ValueInner::Bool { .. } => 1,
         ValueInner::Float { .. } => 1 + size_of::<f64>(),
+        ValueInner::Decimal { inner } => super::decimal::encoded_len(*inner),
         ValueInner::BStr { inner } => {
             1 + payload_width(inner.len() as u64, bstr::INLINE) + inner.len()
         }

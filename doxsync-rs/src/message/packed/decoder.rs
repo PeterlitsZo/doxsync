@@ -401,6 +401,14 @@ impl PackedMessageDecoder {
             TAG_TSTR_REF => Self::unpack_tstr_ref(bytes, state).map_err(|e| e.with_context("unpack text string reference")),
             TAG_ARRAY => Self::unpack_array(bytes, state).map_err(|e| e.with_context("unpack array")),
             TAG_FLOAT => Self::unpack_simple_or_float(bytes).map_err(|e| e.with_context("unpack simple value or float")),
+            TAG_POSDECIMAL | TAG_NEGDECIMAL => {
+                if state.protocol() != Some(2) {
+                    return Err(Error::new(ErrorKind::InvalidData, "decimal requires protocol 2"));
+                }
+                crate::protocol::decimal::decode(bytes)
+                    .map(Value::inner_decimal)
+                    .map_err(|e| e.with_context("unpack decimal"))
+            }
             TAG_MAP => Self::unpack_map(bytes, state).map_err(|e| e.with_context("unpack map")),
             _ => Err(Error::new(ErrorKind::InvalidData, "invalid value type")),
         }

@@ -1,17 +1,18 @@
-import { init, Producer, Consumer, supportedProtocols } from "@doxsync/core";
+import { init, Producer, Consumer, Decimal, supportedProtocols } from "@doxsync/core";
 
 await init();
-const producer = new Producer({ count: 1n, data: new Uint8Array([1, 2, 3]) }, supportedProtocols());
+const producer = new Producer({ count: 1n, price: new Decimal("12.34"), data: new Uint8Array([1, 2, 3]) }, supportedProtocols());
 const consumer = new Consumer();
 
 try {
   consumer.consumeDiff(producer.produceDiff());
   console.log("Snapshot:", consumer.document());
 
-  producer.replace({ count: 2n, data: new Uint8Array([1, 2, 3]) });
+  producer.replace({ count: 2n, price: new Decimal("12.35"), data: new Uint8Array([1, 2, 3]) });
   const message = producer.produceDiff();
   if (message !== undefined) consumer.consumeDiff(message);
   console.log("Updated:", consumer.document());
+  console.log("Exact price:", consumer.document().price.toFixed(2));
   console.log("Unchanged:", producer.produceDiff());
 } finally {
   producer.free();

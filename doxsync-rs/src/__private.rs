@@ -11,7 +11,7 @@ pub use std::{
     vec::Vec,
 };
 
-use crate::{Error, ErrorKind, Result, Value};
+use crate::{Decimal, Error, ErrorKind, Result, Value};
 
 /// Converts a supported Rust value into a doxsync [`Value`].
 #[doc(hidden)]
@@ -138,6 +138,18 @@ impl IntoValue for f32 {
 impl IntoValue for f64 {
     fn into_value(self) -> Result<Value> {
         Value::float(self)
+    }
+}
+
+impl IntoValue for Decimal {
+    fn into_value(self) -> Result<Value> {
+        Value::decimal(self)
+    }
+}
+
+impl IntoValue for &Decimal {
+    fn into_value(self) -> Result<Value> {
+        Value::decimal(*self)
     }
 }
 

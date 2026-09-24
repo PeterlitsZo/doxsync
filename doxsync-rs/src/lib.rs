@@ -19,9 +19,10 @@ pub use document::Document;
 pub use error::{Error, ErrorKind, Result};
 pub use message::{Message, PackedMessage};
 pub use producer::Producer;
+pub use rust_decimal::Decimal;
 pub use value::{Value, ValueKind};
 
-/// Returns all protocol versions supported by this build, currently `[1]`.
+/// Returns all protocol versions supported by this build, currently `[1, 2]`.
 ///
 /// Consumers can advertise this list to producers for protocol negotiation.
 pub fn supported_protocols() -> &'static [u32] {

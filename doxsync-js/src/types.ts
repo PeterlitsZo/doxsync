@@ -1,10 +1,15 @@
-/** Numbers are floats; bigint values are integers in [-2^64, 2^64 - 1]. */
+import type { Decimal } from "decimal.js";
+
+/** Numbers are floats; bigint values are integers in [-2^64, 2^64 - 1].
+ * Decimal instances preserve numeric value, but not trailing zeros.
+ */
 export type SyncValue =
   | null
   | boolean
   | string
   | number
   | bigint
+  | Decimal
   | Uint8Array
   | SyncValue[]
   | { [key: string]: SyncValue };

@@ -1,6 +1,6 @@
 //! JS bindings only; synchronization and protocol state live in the core types.
 
-use js_sys::{Array, Reflect, Uint8Array};
+use js_sys::{Array, Function, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 use crate::{Document, Error, ErrorKind, PackedMessage};
@@ -38,12 +38,17 @@ fn unexpected(message: &'static str) -> JsValue {
 #[wasm_bindgen]
 pub struct Producer {
     inner: crate::Producer,
+    decimal_to_string: Function,
 }
 
 #[wasm_bindgen]
 impl Producer {
     #[wasm_bindgen(constructor)]
-    pub fn new(value: JsValue, protocols: JsValue) -> Result<Producer, JsValue> {
+    pub fn new(
+        value: JsValue,
+        protocols: JsValue,
+        decimal_to_string: Function,
+    ) -> Result<Producer, JsValue> {
         if !Array::is_array(&protocols) {
             return Err(invalid("protocols must be an array of u32 integers"));
         }
@@ -62,15 +67,16 @@ impl Producer {
                     .ok_or_else(|| invalid("protocol versions must be u32 integers"))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let document = Document::new(value::from_js(&value)?);
+        let document = Document::new(value::from_js(&value, &decimal_to_string)?);
         Ok(Self {
             inner: crate::Producer::new(document, &protocols).map_err(js_error)?,
+            decimal_to_string,
         })
     }
 
     pub fn replace(&mut self, value: JsValue) -> Result<(), JsValue> {
         // Convert completely before touching the current document or pools.
-        let document = Document::new(value::from_js(&value)?);
+        let document = Document::new(value::from_js(&value, &self.decimal_to_string)?);
         self.inner.replace(document);
         Ok(())
     }
@@ -108,9 +114,9 @@ impl Consumer {
             .map_err(js_error)
     }
 
-    pub fn document(&self) -> Result<JsValue, JsValue> {
+    pub fn document(&self, decimal_from_string: Function) -> Result<JsValue, JsValue> {
         match self.inner.document() {
-            Some(document) => value::to_js(&document.value()),
+            Some(document) => value::to_js(&document.value(), &decimal_from_string),
             None => Ok(JsValue::UNDEFINED),
         }
     }
