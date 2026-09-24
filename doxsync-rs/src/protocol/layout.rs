@@ -1,5 +1,5 @@
 use super::consts::*;
-use crate::{Value, ValueInner};
+use crate::{Error, ErrorKind, Result, Value, ValueInner};
 
 /// Bytes following the tag for an integer or a collection length.
 pub(crate) fn payload_width(value: u64, inline: u8) -> usize {
@@ -22,7 +22,7 @@ pub(crate) fn varuint_len(value: u64) -> usize {
 
 /// Encoded base cost.
 ///
-/// Excluding child values, map keys, TStr encodings, actions, paths, and pool
+/// Excluding child values, map keys, TStr/BStr encodings, actions, paths, and pool
 /// patches.
 pub(crate) fn value_base_cost(value: &Value, protocol: u32) -> usize {
     match value.inner() {
@@ -31,10 +31,7 @@ pub(crate) fn value_base_cost(value: &Value, protocol: u32) -> usize {
         ValueInner::Null | ValueInner::Bool { .. } => 1,
         ValueInner::Float { inner } => 1 + super::float::payload_width(*inner, protocol),
         ValueInner::Decimal { inner } => super::decimal::encoded_len(*inner),
-        ValueInner::BStr { inner } => {
-            1 + payload_width(inner.len() as u64, bstr::INLINE) + inner.len()
-        }
-        ValueInner::TStr { .. } => 0,
+        ValueInner::BStr { .. } | ValueInner::TStr { .. } => 0,
         ValueInner::Array { inner } => 1 + payload_width(inner.len() as u64, array::INLINE),
         ValueInner::Map { inner } => 1 + payload_width(inner.len() as u64, map::INLINE),
     }
@@ -84,4 +81,31 @@ pub(crate) fn action_tag(action: &crate::patch::Action) -> u64 {
         Action::Delete { .. } => ACTION_DELETE,
         Action::Copy { .. } => ACTION_COPY,
     }) as u64
+}
+
+/// A decision frozen at the first occurrence of a binary value in a message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BStrEncoding {
+    Literal,
+    Reference(u32),
+}
+
+pub(crate) fn bstr_literal_len(value_len: usize) -> Result<usize> {
+    let len = u64::try_from(value_len)
+        .map_err(|_| Error::new(ErrorKind::InvalidData, "binary value too large"))?;
+    value_len
+        .checked_add(1 + payload_width(len, bstr::INLINE))
+        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "binary value too large"))
+}
+
+pub(crate) fn bstr_encoded_len(value_len: usize, encoding: BStrEncoding) -> Result<usize> {
+    match encoding {
+        BStrEncoding::Literal => bstr_literal_len(value_len),
+        BStrEncoding::Reference(key) => Ok(1 + payload_width(u64::from(key), posint::INLINE)),
+    }
+}
+
+pub(crate) fn bstr_ref_key(value_len: usize, key: Option<u32>) -> Result<Option<u32>> {
+    let literal = bstr_literal_len(value_len)?;
+    Ok(key.filter(|key| 1 + payload_width(u64::from(*key), posint::INLINE) < literal))
 }

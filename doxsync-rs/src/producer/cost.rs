@@ -1,18 +1,18 @@
 use std::collections::HashMap;
 
 use crate::{
-    Result, Value, ValueInner,
+    Error, ErrorKind, Result, Value, ValueInner,
     patch::{Action, Path},
     protocol::{
         PoolPreparation, PoolSavepoint, StringUsage,
         consts::DEFAULT_ACTIONS_LIMIT,
-        layout::{action_tag, tstr_encoded_len, value_base_cost, varuint_len},
-        visit_strings,
+        layout::{action_tag, bstr_encoded_len, tstr_encoded_len, value_base_cost, varuint_len},
+        visit_bytes, visit_strings,
     },
     state::ProducerStateTxn,
 };
 
-/// Only state-independent subtree bytes are memoized. String encodings are
+/// Only state-independent subtree bytes are memoized. String and binary encodings are
 /// never cached.
 #[derive(Default)]
 struct ValueCostCache {
@@ -133,6 +133,15 @@ impl<'s> CostSession<'s> {
                 },
                 StringUsage::TStr => tstr_encoded_len(string.len(), key),
             };
+            Ok(())
+        })?;
+        visit_bytes(value, &mut |value| {
+            cost = cost
+                .checked_add(bstr_encoded_len(
+                    value.len(),
+                    self.pools.bytes_encoding(value),
+                )?)
+                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "value cost too large"))?;
             Ok(())
         })?;
         Ok(cost)

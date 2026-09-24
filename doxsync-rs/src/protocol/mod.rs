@@ -43,3 +43,25 @@ pub(crate) fn visit_strings(
     }
     Ok(())
 }
+
+/// Visits every binary value occurrence, preserving array and map value order.
+pub(crate) fn visit_bytes(
+    value: &Value,
+    visit: &mut impl FnMut(&Arc<Vec<u8>>) -> Result<()>,
+) -> Result<()> {
+    match value.inner() {
+        ValueInner::BStr { inner } => visit(inner)?,
+        ValueInner::Array { inner } => {
+            for child in inner {
+                visit_bytes(child, visit)?;
+            }
+        }
+        ValueInner::Map { inner } => {
+            for child in inner.values() {
+                visit_bytes(child, visit)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}

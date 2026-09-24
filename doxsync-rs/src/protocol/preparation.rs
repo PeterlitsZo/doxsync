@@ -1,9 +1,13 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use crate::{
     Error, ErrorKind, Result,
     patch::{Action, Path, PathSegment},
     state::{
+        BYTES_POOL_CAPACITY, BYTES_POOL_ENTRY_BYTES_LIMIT, BYTES_POOL_PATCH_BYTES_LIMIT,
         InsertPathResult, InsertStringPoolResult, PATH_KEY_BYTES_LIMIT, PATH_PATCH_BYTES_LIMIT,
         PATH_POOL_CAPACITY, PATH_SEGMENTS_LIMIT, ProducerStateSavepoint, ProducerStateTxn,
         STRING_POOL_CAPACITY,
@@ -11,14 +15,16 @@ use crate::{
 };
 
 use super::{
-    consts::{METADATA_PATHS, METADATA_PROTOCOL, METADATA_STRINGS},
-    layout::{path_definition_len, path_key_ref_key, varuint_len},
-    visit_strings,
+    consts::{METADATA_BYTES, METADATA_PATHS, METADATA_PROTOCOL, METADATA_STRINGS},
+    layout::{BStrEncoding, bstr_ref_key, path_definition_len, path_key_ref_key, varuint_len},
+    visit_bytes, visit_strings,
 };
 
 /// Definitions in their first-use order. No encoded payloads are allocated.
 #[derive(Default)]
 pub(crate) struct PreparedPools {
+    pub(crate) bytes: Vec<(u32, Arc<Vec<u8>>)>,
+    pub(crate) bytes_choices: BTreeMap<Arc<Vec<u8>>, BStrEncoding>,
     pub(crate) strings: Vec<(u32, Arc<String>)>,
     pub(crate) paths: Vec<(u32, Vec<PreparedPathSegment>)>,
 }
@@ -34,6 +40,9 @@ pub(crate) enum PreparedPathSegment {
 #[must_use]
 pub(crate) struct PoolSavepoint {
     txn: ProducerStateSavepoint,
+    bytes_choices_len: usize,
+    bytes_patch_len: usize,
+    bytes_patch_bytes: usize,
     strings_len: usize,
     paths_len: usize,
     string_patch_len: usize,
@@ -48,6 +57,9 @@ pub(crate) struct PoolSavepoint {
 /// Each distinct resource is touched exactly once, even across multiple actions.
 pub(crate) struct PoolPreparation<'s> {
     txn: &'s mut ProducerStateTxn,
+    bytes_order: Vec<Arc<Vec<u8>>>,
+    bytes_pinned: [bool; BYTES_POOL_CAPACITY],
+    bytes_patch_bytes: usize,
     string_seen: BTreeSet<Arc<String>>,
     path_seen: BTreeSet<Arc<Path>>,
     strings: Vec<Arc<String>>,
@@ -64,6 +76,9 @@ impl<'s> PoolPreparation<'s> {
     pub(crate) fn new(txn: &'s mut ProducerStateTxn, actions_limit: usize) -> Self {
         Self {
             txn,
+            bytes_order: Vec::new(),
+            bytes_pinned: [false; BYTES_POOL_CAPACITY],
+            bytes_patch_bytes: 0,
             string_seen: BTreeSet::new(),
             path_seen: BTreeSet::new(),
             strings: Vec::new(),
@@ -80,6 +95,9 @@ impl<'s> PoolPreparation<'s> {
     pub(crate) fn savepoint(&self) -> PoolSavepoint {
         PoolSavepoint {
             txn: self.txn.savepoint(),
+            bytes_choices_len: self.bytes_order.len(),
+            bytes_patch_len: self.patches.bytes.len(),
+            bytes_patch_bytes: self.bytes_patch_bytes,
             strings_len: self.strings.len(),
             paths_len: self.paths.len(),
             string_patch_len: self.patches.strings.len(),
@@ -97,6 +115,13 @@ impl<'s> PoolPreparation<'s> {
         assert!(point.string_patch_len <= self.patches.strings.len());
         assert!(point.path_patch_len <= self.patches.paths.len());
         self.txn.rollback_to(point.txn);
+        for value in self.bytes_order.drain(point.bytes_choices_len..) {
+            if let Some(BStrEncoding::Reference(key)) = self.patches.bytes_choices.remove(&value) {
+                self.bytes_pinned[key as usize] = false;
+            }
+        }
+        self.patches.bytes.truncate(point.bytes_patch_len);
+        self.bytes_patch_bytes = point.bytes_patch_bytes;
         for string in self.strings.drain(point.strings_len..) {
             self.string_seen.remove(&string);
         }
@@ -128,9 +153,15 @@ impl<'s> PoolPreparation<'s> {
         match action {
             Action::Snapshot { value } => {
                 visit_strings(value, &mut |string, _| self.prepare_string(string))?;
+                if self.txn.protocol() == 2 {
+                    visit_bytes(value, &mut |value| self.prepare_bytes(value))?;
+                }
             }
             Action::Add { path, value } | Action::Replace { path, value } => {
                 visit_strings(value, &mut |string, _| self.prepare_string(string))?;
+                if self.txn.protocol() == 2 {
+                    visit_bytes(value, &mut |value| self.prepare_bytes(value))?;
+                }
                 self.prepare_path(path)?;
             }
             Action::Delete { path } => self.prepare_path(path)?,
@@ -141,6 +172,54 @@ impl<'s> PoolPreparation<'s> {
         }
         self.actions += 1;
         Ok(())
+    }
+
+    fn prepare_bytes(&mut self, value: &Arc<Vec<u8>>) -> Result<()> {
+        if self.patches.bytes_choices.contains_key(value) {
+            return Ok(());
+        }
+        let mut encoding = BStrEncoding::Literal;
+        if let Some(key) = bstr_ref_key(value.len(), self.txn.bytes_pool.key(value))? {
+            self.txn.bytes_pool.touch(key);
+            encoding = BStrEncoding::Reference(key);
+        } else if (16..=BYTES_POOL_ENTRY_BYTES_LIMIT).contains(&value.len()) {
+            if let Some(key) = self.txn.bytes_pool.candidate(&self.bytes_pinned) {
+                let definition_len = value
+                    .len()
+                    .checked_add(varuint_len(u64::from(key)))
+                    .and_then(|len| len.checked_add(varuint_len(value.len() as u64)))
+                    .ok_or_else(|| {
+                        Error::new(ErrorKind::InvalidData, "bytes pool definition too large")
+                    })?;
+                if let Some(total) = self
+                    .bytes_patch_bytes
+                    .checked_add(definition_len)
+                    .filter(|total| *total <= BYTES_POOL_PATCH_BYTES_LIMIT)
+                {
+                    self.txn.bytes_pool.insert(key, value);
+                    self.bytes_patch_bytes = total;
+                    self.patches.bytes.push((key, value.clone()));
+                    encoding = BStrEncoding::Reference(key);
+                }
+            }
+        }
+        if let BStrEncoding::Reference(key) = encoding {
+            self.bytes_pinned[key as usize] = true;
+        }
+        self.bytes_order.push(value.clone());
+        self.patches.bytes_choices.insert(value.clone(), encoding);
+        Ok(())
+    }
+
+    pub(crate) fn bytes_encoding(&self, value: &Arc<Vec<u8>>) -> BStrEncoding {
+        if self.txn.protocol() == 1 {
+            return BStrEncoding::Literal;
+        }
+        *self
+            .patches
+            .bytes_choices
+            .get(value)
+            .expect("binary value not prepared")
     }
 
     fn prepare_string(&mut self, string: &Arc<String>) -> Result<()> {
@@ -258,7 +337,8 @@ impl<'s> PoolPreparation<'s> {
         let mut len = varuint_len(
             u64::from(protocol.is_some())
                 + u64::from(!self.patches.strings.is_empty())
-                + u64::from(!self.patches.paths.is_empty()),
+                + u64::from(!self.patches.paths.is_empty())
+                + u64::from(!self.patches.bytes.is_empty()),
         );
         if let Some(version) = protocol {
             len += varuint_len(METADATA_PROTOCOL) + varuint_len(u64::from(version));
@@ -267,6 +347,11 @@ impl<'s> PoolPreparation<'s> {
             len += varuint_len(METADATA_STRINGS)
                 + varuint_len(self.patches.strings.len() as u64)
                 + self.string_patch_bytes;
+        }
+        if !self.patches.bytes.is_empty() {
+            len += varuint_len(METADATA_BYTES)
+                + varuint_len(self.patches.bytes.len() as u64)
+                + self.bytes_patch_bytes;
         }
         if !self.patches.paths.is_empty() {
             len += varuint_len(METADATA_PATHS)

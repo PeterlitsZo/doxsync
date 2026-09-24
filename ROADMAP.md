@@ -10,7 +10,8 @@
 - [ ] Limit string lengths in the string pool.
 - [x] Cache TStr values alongside map keys and use pool references when shorter.
 - [ ] Add a FIFO/LRU admission queue for caching TStr values.
-- [ ] Support caching BStr values.
+- [x] Support caching BStr values.
 - [ ] Represent each path using a parent reference and the current segment to
       reduce memory usage.
 - [ ] Support `Path::parse("foo.bar.42.'43'")`.
+- [ ] Read whole project and make sure it's clean.

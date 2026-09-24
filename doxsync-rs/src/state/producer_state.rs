@@ -4,6 +4,7 @@ use crate::patch::Path;
 use crate::state::{Bitmap, Lru, ProducerStateTxn};
 
 pub(crate) struct ProducerState {
+    pub(super) bytes_pool: super::bytes_pool::BytesPool,
     pub(crate) protocol: u32,
     pub(crate) pending_protocol: Option<u32>,
 
@@ -23,6 +24,7 @@ impl Default for ProducerState {
         let default_string_pool_size = super::STRING_POOL_CAPACITY;
         let default_path_pool_size = super::PATH_POOL_CAPACITY;
         Self {
+            bytes_pool: Default::default(),
             protocol: 1,
             pending_protocol: Some(1),
 

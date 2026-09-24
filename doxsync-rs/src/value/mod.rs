@@ -425,15 +425,17 @@ impl Value {
     }
 
     pub(crate) fn inner_bstr(inner: Vec<u8>) -> Self {
+        Self::inner_bstr_arc(Arc::new(inner))
+    }
+
+    pub(crate) fn inner_bstr_arc(inner: Arc<Vec<u8>>) -> Self {
         let mut hash = blake3::Hasher::new();
         hash.update(&[TAG_BSTR]);
         hash.update(&inner);
         let hash = hash.finalize();
         Value {
             hash,
-            inner: Arc::new(ValueInner::BStr {
-                inner: Arc::new(inner),
-            }),
+            inner: Arc::new(ValueInner::BStr { inner }),
         }
     }
 

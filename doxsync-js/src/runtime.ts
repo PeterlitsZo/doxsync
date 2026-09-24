@@ -48,6 +48,7 @@ export class Producer {
    * Versions 1 and 2 are supported. Missing, invalid, empty, or incompatible
    * lists throw InvalidData errors. Order and duplicates do not matter.
    * Protocol 1 transmits Decimal values as strings; protocol 2 preserves the type.
+   * Protocol 2 also pools binary values; both peers must support that extension.
    */
   constructor(value: SyncValue, protocols: readonly number[]) {
     requireInitialized();

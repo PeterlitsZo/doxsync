@@ -7,6 +7,7 @@ use super::ConsumerState;
 /// Owns consumer pools until explicitly committed or rolled back.
 #[must_use]
 pub(crate) struct ConsumerStateTxn {
+    bytes_pool: BTreeMap<u32, Arc<Vec<u8>>>,
     protocol: Option<u32>,
     string_pool: BTreeMap<u32, Arc<String>>,
     path_pool: BTreeMap<u32, Arc<Path>>,
@@ -23,11 +24,13 @@ pub(crate) struct ConsumerStateSavepoint {
 impl ConsumerStateTxn {
     pub(super) fn new(state: ConsumerState) -> Self {
         let ConsumerState {
+            bytes_pool,
             protocol,
             string_pool,
             path_pool,
         } = state;
         Self {
+            bytes_pool,
             protocol,
             string_pool,
             path_pool,
@@ -43,6 +46,19 @@ impl ConsumerStateTxn {
         let previous = self.protocol.replace(version);
         self.rollback_log
             .push(ConsumerStateRollbackEntry::ProtocolSet { previous });
+    }
+
+    pub(crate) fn get_bytes(&self, key: u32) -> Option<&Arc<Vec<u8>>> {
+        self.bytes_pool.get(&key)
+    }
+
+    /// Applies definitions whose slot, length, and patch budgets were validated.
+    pub(crate) fn apply_bytes_pool_patch(&mut self, patch: Vec<(u32, Arc<Vec<u8>>)>) {
+        for (key, value) in patch {
+            let previous = self.bytes_pool.insert(key, value);
+            self.rollback_log
+                .push(ConsumerStateRollbackEntry::BytesPoolSet { key, previous });
+        }
     }
 
     pub(crate) fn get_string(&self, key: u32) -> Option<&Arc<String>> {
@@ -92,12 +108,14 @@ impl ConsumerStateTxn {
 
     pub(crate) fn commit(self) -> ConsumerState {
         let Self {
+            bytes_pool,
             protocol,
             string_pool,
             path_pool,
             rollback_log: _,
         } = self;
         ConsumerState {
+            bytes_pool,
             protocol,
             string_pool,
             path_pool,
@@ -113,6 +131,10 @@ impl ConsumerStateTxn {
 }
 
 enum ConsumerStateRollbackEntry {
+    BytesPoolSet {
+        key: u32,
+        previous: Option<Arc<Vec<u8>>>,
+    },
     ProtocolSet {
         previous: Option<u32>,
     },
@@ -129,6 +151,14 @@ enum ConsumerStateRollbackEntry {
 impl ConsumerStateRollbackEntry {
     fn undo(self, txn: &mut ConsumerStateTxn) {
         match self {
+            Self::BytesPoolSet { key, previous } => match previous {
+                Some(value) => {
+                    txn.bytes_pool.insert(key, value);
+                }
+                None => {
+                    txn.bytes_pool.remove(&key);
+                }
+            },
             Self::ProtocolSet { previous } => txn.protocol = previous,
             Self::StringPoolSet { key, previous } => match previous {
                 Some(value) => {

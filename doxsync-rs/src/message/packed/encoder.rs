@@ -5,7 +5,7 @@ use crate::patch::{Action, Path};
 use crate::protocol::{
     PoolPreparation, PreparedPathSegment, ProjectedMessage,
     consts::*,
-    layout::{action_tag, payload_width, tstr_ref_key},
+    layout::{BStrEncoding, action_tag, payload_width, tstr_ref_key},
 };
 use crate::state::ProducerStateTxn;
 use crate::{Error, ErrorKind, Result, Value};
@@ -34,6 +34,7 @@ impl PackedMessageEncoder {
             actions: message.actions(),
             state_txn,
             actions_limit: self.actions_limit,
+            bytes_choices: BTreeMap::new(),
         };
         let mut bytes = Vec::new();
         let savepoint = internal.state_txn.savepoint();
@@ -47,6 +48,7 @@ impl PackedMessageEncoder {
 }
 
 struct PackedMessageEncoderInternal<'a, 's> {
+    bytes_choices: BTreeMap<Arc<Vec<u8>>, BStrEncoding>,
     actions: &'a [Action],
     state_txn: &'s mut ProducerStateTxn,
     actions_limit: usize,
@@ -95,12 +97,15 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
         let prepared = preparation.finish();
         let string_patch = prepared.strings;
         let path_patch = prepared.paths;
+        let bytes_patch = prepared.bytes;
+        self.bytes_choices = prepared.bytes_choices;
 
         self.pack_varuint(
             bytes,
             u64::from(protocol.is_some())
                 + u64::from(!string_patch.is_empty())
-                + u64::from(!path_patch.is_empty()),
+                + u64::from(!path_patch.is_empty())
+                + u64::from(!bytes_patch.is_empty()),
         );
 
         if let Some(version) = protocol {
@@ -115,6 +120,16 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
                 self.pack_varuint(bytes, key as u64);
                 self.pack_varuint(bytes, string.len() as u64);
                 bytes.extend_from_slice(string.as_bytes());
+            }
+        }
+
+        if !bytes_patch.is_empty() {
+            self.pack_varuint(bytes, METADATA_BYTES);
+            self.pack_varuint(bytes, bytes_patch.len() as u64);
+            for (key, value) in bytes_patch {
+                self.pack_varuint(bytes, u64::from(key));
+                self.pack_varuint(bytes, value.len() as u64);
+                bytes.extend_from_slice(&value);
             }
         }
 
@@ -235,7 +250,24 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
         }
     }
 
-    fn pack_bstr(&mut self, bytes: &mut Vec<u8>, value: &[u8]) {
+    fn pack_bstr(&mut self, bytes: &mut Vec<u8>, value: &Arc<Vec<u8>>) {
+        let encoding = if self.state_txn.protocol() == 1 {
+            BStrEncoding::Literal
+        } else {
+            *self
+                .bytes_choices
+                .get(value)
+                .expect("binary value not prepared")
+        };
+        if let BStrEncoding::Reference(key) = encoding {
+            if payload_width(u64::from(key), posint::INLINE) == 0 {
+                bytes.push((TAG_BSTR_REF << TAG_WIDTH) | key as u8);
+            } else {
+                bytes.push((TAG_BSTR_REF << TAG_WIDTH) | posint::BITS_8);
+                bytes.push(u8::try_from(key).expect("prepared bytes slot must fit u8"));
+            }
+            return;
+        }
         let value_len = value.len();
 
         let width = payload_width(value_len as u64, bstr::INLINE);

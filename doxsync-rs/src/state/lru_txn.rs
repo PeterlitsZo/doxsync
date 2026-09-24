@@ -66,6 +66,18 @@ where
         result
     }
 
+    pub(super) fn least_recent_where(&self, mut eligible: impl FnMut(&K) -> bool) -> Option<&K> {
+        let mut at = self.lru.tail;
+        while at != usize::MAX {
+            let entry = &self.lru.arena[at];
+            if eligible(&entry.key) {
+                return Some(&entry.key);
+            }
+            at = entry.prev;
+        }
+        None
+    }
+
     pub(super) fn savepoint(&self) -> LruSavepoint {
         LruSavepoint {
             rollback_log_len: self.rollback_log.len(),

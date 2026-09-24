@@ -11,6 +11,8 @@ pub(crate) const TAG_TSTR_REF: u8 = 0b1000;
 pub(crate) const TAG_POSDECIMAL: u8 = 0b1001;
 pub(crate) const TAG_NEGDECIMAL: u8 = 0b1010;
 
+pub(crate) const TAG_BSTR_REF: u8 = 0b1011;
+
 pub(crate) const TAG_WIDTH: usize = 4;
 pub(crate) const PAYLOAD_MASK: u8 = 0x0F;
 
@@ -83,3 +85,5 @@ pub(crate) const SUPPORTED_PROTOCOLS: &[u32] = &[1, 2];
 pub(crate) const METADATA_PROTOCOL: u64 = 2;
 pub(crate) const METADATA_STRINGS: u64 = 0;
 pub(crate) const METADATA_PATHS: u64 = 1;
+
+pub(crate) const METADATA_BYTES: u64 = 3;

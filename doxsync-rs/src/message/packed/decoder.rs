@@ -8,6 +8,7 @@ use crate::message::Message;
 use crate::patch::{Action, Path, PathSegment};
 use crate::protocol::consts::*;
 use crate::state::{
+    BYTES_POOL_CAPACITY, BYTES_POOL_ENTRY_BYTES_LIMIT, BYTES_POOL_PATCH_BYTES_LIMIT,
     ConsumerStateTxn, PATH_KEY_BYTES_LIMIT, PATH_PATCH_BYTES_LIMIT, PATH_POOL_CAPACITY,
     PATH_SEGMENTS_LIMIT, STRING_POOL_CAPACITY,
 };
@@ -97,6 +98,17 @@ impl PackedMessageDecoder {
                         .map_err(|e| e.with_context("unpack string pool patch"))?;
                     state.apply_string_pool_patch(patch);
                 }
+                METADATA_BYTES => {
+                    if state.protocol() != Some(2) {
+                        return Err(Error::new(
+                            ErrorKind::InvalidData,
+                            "bytes pool requires protocol 2",
+                        ));
+                    }
+                    let patch = Self::unpack_bytes_pool_patch(&mut bytes)
+                        .map_err(|e| e.with_context("unpack bytes pool patch"))?;
+                    state.apply_bytes_pool_patch(patch);
+                }
                 METADATA_PATHS => {
                     let patch = Self::unpack_path_pool_patch(&mut bytes, state).map_err(|e| {
                         e.with_context("unpack path pool patch")
@@ -134,6 +146,86 @@ impl PackedMessageDecoder {
         }
 
         Ok(Message { actions })
+    }
+
+    fn unpack_bytes_pool_patch(bytes: &mut &[u8]) -> Result<Vec<(u32, Arc<Vec<u8>>)>> {
+        let count = Self::unpack_varuint(bytes)?;
+        if count > BYTES_POOL_CAPACITY as u64 {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "bytes pool patch has too many entries",
+            ));
+        }
+        let start_len = bytes.len();
+        let mut seen = [false; BYTES_POOL_CAPACITY];
+        let mut patch = Vec::new();
+        for _ in 0..count {
+            let key = Self::unpack_varuint(bytes)?;
+            if key >= BYTES_POOL_CAPACITY as u64 || seen[key as usize] {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "invalid or duplicate bytes pool slot",
+                ));
+            }
+            seen[key as usize] = true;
+            let len = usize::try_from(Self::unpack_varuint(bytes)?)
+                .map_err(|_| Error::new(ErrorKind::InvalidData, "bytes pool entry too large"))?;
+            if len > BYTES_POOL_ENTRY_BYTES_LIMIT {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "bytes pool entry too large",
+                ));
+            }
+            if (start_len - bytes.len())
+                .checked_add(len)
+                .is_none_or(|total| total > BYTES_POOL_PATCH_BYTES_LIMIT)
+            {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "bytes pool patch too large",
+                ));
+            }
+            let value = bytes
+                .get(..len)
+                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "truncated bytes pool entry"))?;
+            patch.push((key as u32, Arc::new(value.to_vec())));
+            *bytes = &bytes[len..];
+        }
+        Ok(patch)
+    }
+
+    fn unpack_bstr_ref(bytes: &mut &[u8], state: &ConsumerStateTxn) -> Result<Value> {
+        if state.protocol() != Some(2) {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "binary reference requires protocol 2",
+            ));
+        }
+        let header = bytes
+            .first()
+            .copied()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "truncated binary reference"))?;
+        let payload = header & PAYLOAD_MASK;
+        let (key, len) = match payload {
+            0..=posint::INLINE => (u32::from(payload), 1),
+            posint::BITS_8 => (
+                u32::from(*bytes.get(1).ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidData, "truncated binary reference")
+                })?),
+                2,
+            ),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "invalid binary reference width",
+                ));
+            }
+        };
+        let value = state
+            .get_bytes(key)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "bytes pool slot not defined"))?;
+        *bytes = &bytes[len..];
+        Ok(Value::inner_bstr_arc(value.clone()))
     }
 
     fn unpack_string_pool_patch(bytes: &mut &[u8]) -> Result<Vec<(u32, Arc<String>)>> {
@@ -396,6 +488,7 @@ impl PackedMessageDecoder {
         match value_type >> TAG_WIDTH {
             TAG_POSINT => Self::unpack_posint(bytes).map_err(|e| e.with_context("unpack posint")),
             TAG_NEGINT => Self::unpack_negint(bytes).map_err(|e| e.with_context("unpack negint")),
+            TAG_BSTR_REF => Self::unpack_bstr_ref(bytes, state).map_err(|e| e.with_context("unpack binary string reference")),
             TAG_BSTR => Self::unpack_bstr(bytes).map_err(|e| e.with_context("unpack binary string")),
             TAG_TSTR => Self::unpack_tstr(bytes).map_err(|e| e.with_context("unpack text string")),
             TAG_TSTR_REF => Self::unpack_tstr_ref(bytes, state).map_err(|e| e.with_context("unpack text string reference")),

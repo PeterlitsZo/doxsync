@@ -4,6 +4,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use super::{
     ProducerState,
     bitmap::Bitmap,
+    bytes_pool::{BytesPoolSavepoint, BytesPoolTxn},
     lru_txn::{LruPutResult, LruSavepoint, LruTxn},
 };
 
@@ -25,11 +26,13 @@ pub(crate) enum InsertPathResult {
 #[must_use]
 pub(crate) struct ProducerStateSavepoint {
     rollback_log_len: usize,
+    bytes_pool: BytesPoolSavepoint,
     string_pool_lru: LruSavepoint,
     path_pool_lru: LruSavepoint,
 }
 
 pub(crate) struct ProducerStateTxn {
+    pub(crate) bytes_pool: BytesPoolTxn,
     protocol: u32,
     pending_protocol: Option<u32>,
     pub(super) path_pool: BTreeMap<u32, Arc<Path>>,
@@ -47,6 +50,7 @@ pub(crate) struct ProducerStateTxn {
 impl ProducerStateTxn {
     pub(super) fn new(state: ProducerState) -> Self {
         let ProducerState {
+            bytes_pool,
             protocol,
             pending_protocol,
             path_pool,
@@ -60,6 +64,7 @@ impl ProducerStateTxn {
         } = state;
 
         Self {
+            bytes_pool: bytes_pool.txn(),
             protocol,
             pending_protocol,
             path_pool,
@@ -76,6 +81,7 @@ impl ProducerStateTxn {
 
     pub(crate) fn commit(self) -> ProducerState {
         let Self {
+            bytes_pool,
             protocol,
             pending_protocol,
             path_pool,
@@ -90,6 +96,7 @@ impl ProducerStateTxn {
         } = self;
 
         ProducerState {
+            bytes_pool: bytes_pool.commit(),
             protocol,
             pending_protocol,
             path_pool,
@@ -107,6 +114,7 @@ impl ProducerStateTxn {
         self.rollback_all();
 
         let Self {
+            bytes_pool,
             protocol,
             pending_protocol,
             path_pool,
@@ -121,6 +129,7 @@ impl ProducerStateTxn {
         } = self;
 
         ProducerState {
+            bytes_pool: bytes_pool.rollback(),
             protocol,
             pending_protocol,
             path_pool,
@@ -151,6 +160,7 @@ impl ProducerStateTxn {
                 .expect("rollback log must contain an entry after the savepoint");
             entry.undo(self);
         }
+        self.bytes_pool.rollback_to(savepoint.bytes_pool);
         self.string_pool_lru.rollback_to(savepoint.string_pool_lru);
         self.path_pool_lru.rollback_to(savepoint.path_pool_lru);
     }
@@ -158,6 +168,7 @@ impl ProducerStateTxn {
     pub(crate) fn savepoint(&self) -> ProducerStateSavepoint {
         ProducerStateSavepoint {
             rollback_log_len: self.rollback_log.len(),
+            bytes_pool: self.bytes_pool.savepoint(),
             string_pool_lru: self.string_pool_lru.savepoint(),
             path_pool_lru: self.path_pool_lru.savepoint(),
         }
@@ -185,7 +196,10 @@ impl ProducerStateTxn {
     pub(crate) fn hit_string_pool_if_exists(&mut self, value: &Arc<String>) {
         if let Some(_) = self.string_pool_reverse.get(value).copied() {
             assert!(
-                matches!(self.string_pool_lru.put(value.clone()), LruPutResult::Updated),
+                matches!(
+                    self.string_pool_lru.put(value.clone()),
+                    LruPutResult::Updated
+                ),
                 "an existing string pool entry must also exist in the LRU"
             );
         }
@@ -195,7 +209,10 @@ impl ProducerStateTxn {
         // Check if the string already exists in the pool.
         if let Some(key) = self.string_pool_reverse.get(value).copied() {
             assert!(
-                matches!(self.string_pool_lru.put(value.clone()), LruPutResult::Updated),
+                matches!(
+                    self.string_pool_lru.put(value.clone()),
+                    LruPutResult::Updated
+                ),
                 "an existing string pool entry must also exist in the LRU"
             );
             return InsertStringPoolResult::Existing { key };

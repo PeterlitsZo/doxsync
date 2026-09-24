@@ -1,4 +1,5 @@
 mod bitmap;
+mod bytes_pool;
 mod consumer_state;
 mod consumer_state_txn;
 mod lru;
@@ -21,3 +22,7 @@ pub(crate) const PATH_POOL_CAPACITY: usize = 4096;
 pub(crate) const PATH_SEGMENTS_LIMIT: usize = 256;
 pub(crate) const PATH_KEY_BYTES_LIMIT: usize = 64 * 1024;
 pub(crate) const PATH_PATCH_BYTES_LIMIT: usize = 1024 * 1024;
+
+pub(crate) const BYTES_POOL_CAPACITY: usize = 256;
+pub(crate) const BYTES_POOL_ENTRY_BYTES_LIMIT: usize = 64 * 1024;
+pub(crate) const BYTES_POOL_PATCH_BYTES_LIMIT: usize = 1024 * 1024;

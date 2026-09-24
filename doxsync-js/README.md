@@ -287,3 +287,23 @@ binary64, choosing the shortest representation that preserves the original
 binary64 bits. Decoded values remain JavaScript numbers. Signed zero is
 preserved; NaNs retain binary64 encoding. Protocol 1 continues to use
 binary64 for every number.
+
+### Binary value reuse
+
+Protocol 2 pools binary values by content, so repeated `Uint8Array` values can
+share a compact reference within a message and across subsequent messages.
+Producers admit payloads from 16 bytes through 64 KiB, using up to 256 slots
+and at most 1 MiB of definitions per message. Values that cannot be admitted
+remain inline. The first definition has an overhead, so pooling does not make
+every message smaller.
+
+The Rust pool shares immutable payload storage. Each `document()` conversion
+still returns independent `Uint8Array` copies: modifying one field cannot change
+another field, the consumer's document, or a later message.
+
+This extends unreleased protocol 2 without adding a version. New consumers accept
+earlier v2 messages, but earlier v2 consumers cannot read binary pool definitions
+or references. Upgrade both v2 peers together; explicitly select `[1]` when
+communicating with an implementation that lacks this extension. Version
+negotiation alone cannot distinguish these v2 builds. Protocol 1 continues to
+encode binary values inline.
