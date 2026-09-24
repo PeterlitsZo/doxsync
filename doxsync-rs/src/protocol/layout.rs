@@ -24,12 +24,12 @@ pub(crate) fn varuint_len(value: u64) -> usize {
 ///
 /// Excluding child values, map keys, TStr encodings, actions, paths, and pool
 /// patches.
-pub(crate) fn value_base_cost(value: &Value) -> usize {
+pub(crate) fn value_base_cost(value: &Value, protocol: u32) -> usize {
     match value.inner() {
         ValueInner::PosInt { inner } => 1 + payload_width(*inner, posint::INLINE),
         ValueInner::NegInt { inner } => 1 + payload_width(*inner, negint::INLINE),
         ValueInner::Null | ValueInner::Bool { .. } => 1,
-        ValueInner::Float { .. } => 1 + size_of::<f64>(),
+        ValueInner::Float { inner } => 1 + super::float::payload_width(*inner, protocol),
         ValueInner::Decimal { inner } => super::decimal::encoded_len(*inner),
         ValueInner::BStr { inner } => {
             1 + payload_width(inner.len() as u64, bstr::INLINE) + inner.len()

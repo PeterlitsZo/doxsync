@@ -6,6 +6,11 @@
   and example data.
 - DO NOT add unit tests until the user asks you to do.
 
+## Protocol Versions
+
+- If the latest protocol version in `WIRE.md` lists only `[UNRELEASED]`,
+  apply protocol changes to that version instead of creating a new version.
+
 ## When You Need to Commit
 
 WHEN THE USER ASKS YOU TO COMMIT, you MUST follow this section.

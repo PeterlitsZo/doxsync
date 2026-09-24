@@ -2,6 +2,7 @@
 
 pub(crate) mod consts;
 pub(crate) mod decimal;
+pub(crate) mod float;
 pub(crate) mod layout;
 mod preparation;
 mod projection;

@@ -279,3 +279,11 @@ through message encoding and are resolved when the consumer reads the definition
 
 This extends v1 directly. Both peers must be upgraded together: older decoders
 reject the new `0b10` path segment tag.
+
+### Compact floating-point values
+
+Protocol 2 encodes numbers as binary16, binary32, or
+binary64, choosing the shortest representation that preserves the original
+binary64 bits. Decoded values remain JavaScript numbers. Signed zero is
+preserved; NaNs retain binary64 encoding. Protocol 1 continues to use
+binary64 for every number.

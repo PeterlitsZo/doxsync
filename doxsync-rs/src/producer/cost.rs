@@ -20,20 +20,20 @@ struct ValueCostCache {
 }
 
 impl ValueCostCache {
-    fn base_cost(&mut self, value: &Value) -> usize {
+    fn base_cost(&mut self, value: &Value, protocol: u32) -> usize {
         if let Some(cost) = self.costs.get(&value.hash()) {
             return *cost;
         }
-        let mut cost = value_base_cost(value);
+        let mut cost = value_base_cost(value, protocol);
         match value.inner() {
             ValueInner::Array { inner } => {
                 for value in inner {
-                    cost += self.base_cost(value);
+                    cost += self.base_cost(value, protocol);
                 }
             }
             ValueInner::Map { inner } => {
                 for value in inner.values() {
-                    cost += self.base_cost(value);
+                    cost += self.base_cost(value, protocol);
                 }
             }
             _ => {}
@@ -55,6 +55,7 @@ pub(super) struct CostSavepoint {
 /// owns commit/rollback of the borrowed transaction. The planner supplies actions
 /// derived exclusively from projected documents; this layer never converts values.
 pub(super) struct CostSession<'s> {
+    protocol: u32,
     pools: PoolPreparation<'s>,
     values: ValueCostCache,
     actions: usize,
@@ -64,6 +65,7 @@ pub(super) struct CostSession<'s> {
 impl<'s> CostSession<'s> {
     pub(super) fn new(txn: &'s mut ProducerStateTxn) -> Self {
         Self {
+            protocol: txn.protocol(),
             pools: PoolPreparation::new(txn, DEFAULT_ACTIONS_LIMIT),
             values: ValueCostCache::default(),
             actions: 0,
@@ -121,7 +123,7 @@ impl<'s> CostSession<'s> {
     }
 
     fn value_cost(&mut self, value: &Value) -> Result<usize> {
-        let mut cost = self.values.base_cost(value);
+        let mut cost = self.values.base_cost(value, self.protocol);
         visit_strings(value, &mut |string, usage| {
             let key = self.pools.string_key(string);
             cost += match usage {

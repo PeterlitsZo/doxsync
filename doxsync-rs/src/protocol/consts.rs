@@ -64,6 +64,8 @@ pub(crate) mod float {
     pub(crate) const FALSE: u8 = 4;
     pub(crate) const TRUE: u8 = 5;
     pub(crate) const NULL: u8 = 6;
+    pub(crate) const BITS_16: u8 = 9;
+    pub(crate) const BITS_32: u8 = 10;
     pub(crate) const BITS_64: u8 = 11;
 }
 

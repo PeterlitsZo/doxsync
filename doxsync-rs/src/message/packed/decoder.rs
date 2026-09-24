@@ -400,7 +400,7 @@ impl PackedMessageDecoder {
             TAG_TSTR => Self::unpack_tstr(bytes).map_err(|e| e.with_context("unpack text string")),
             TAG_TSTR_REF => Self::unpack_tstr_ref(bytes, state).map_err(|e| e.with_context("unpack text string reference")),
             TAG_ARRAY => Self::unpack_array(bytes, state).map_err(|e| e.with_context("unpack array")),
-            TAG_FLOAT => Self::unpack_simple_or_float(bytes).map_err(|e| e.with_context("unpack simple value or float")),
+            TAG_FLOAT => Self::unpack_simple_or_float(bytes, state).map_err(|e| e.with_context("unpack simple value or float")),
             TAG_POSDECIMAL | TAG_NEGDECIMAL => {
                 if state.protocol() != Some(2) {
                     return Err(Error::new(ErrorKind::InvalidData, "decimal requires protocol 2"));
@@ -679,7 +679,7 @@ impl PackedMessageDecoder {
         Ok(Value::inner_tstr(value))
     }
 
-    fn unpack_simple_or_float(bytes: &mut &[u8]) -> Result<Value> {
+    fn unpack_simple_or_float(bytes: &mut &[u8], state: &ConsumerStateTxn) -> Result<Value> {
         fn unexpected_end_of_value() -> Error {
             Error::new(ErrorKind::InvalidData, "unexpected end of value")
         }
@@ -700,6 +700,9 @@ impl PackedMessageDecoder {
                 *bytes = bytes.get(1..).ok_or_else(unexpected_end_of_value)?;
                 Ok(Value::inner_null())
             }
+            float::BITS_16 | float::BITS_32 if state.protocol() == Some(2) => {
+                Self::unpack_float(bytes)
+            }
             float::BITS_64 => Self::unpack_float(bytes),
             _ => Err(
                 Error::new(ErrorKind::InvalidData, "invalid simple value or float")
@@ -718,16 +721,21 @@ impl PackedMessageDecoder {
         })?;
         let first_byte_payload = *first_byte & PAYLOAD_MASK;
 
-        if first_byte_payload != float::BITS_64 {
-            return Err(unexpected_end_of_value().with_metadata("first_byte_payload", first_byte));
-        }
-
-        let bytes_to_parse = bytes
-            .get(1..9)
-            .ok_or_else(|| unexpected_end_of_value().with_metadata("first_byte", first_byte))?;
-        let bytes_ptr = bytes_to_parse as *const [u8] as *const u8;
-        let value = f64::from_le_bytes(unsafe { *(bytes_ptr as *const [u8; 8]) });
-        *bytes = bytes.get(9..).ok_or_else(unexpected_end_of_value)?;
+        let width = match first_byte_payload {
+            float::BITS_16 => 2,
+            float::BITS_32 => 4,
+            float::BITS_64 => 8,
+            _ => return Err(Error::new(ErrorKind::InvalidData, "invalid float width")),
+        };
+        let payload = bytes
+            .get(1..1 + width)
+            .ok_or_else(unexpected_end_of_value)?;
+        let value = match width {
+            2 => half::f16::from_le_bytes(payload.try_into().unwrap()).to_f64(),
+            4 => f64::from(f32::from_le_bytes(payload.try_into().unwrap())),
+            _ => f64::from_le_bytes(payload.try_into().unwrap()),
+        };
+        *bytes = &bytes[1 + width..];
 
         Ok(Value::inner_float(value))
     }

@@ -299,8 +299,20 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
     }
 
     fn pack_float(&mut self, bytes: &mut Vec<u8>, value: f64) {
-        bytes.push((TAG_FLOAT << TAG_WIDTH) | float::BITS_64);
-        bytes.extend_from_slice(&value.to_le_bytes());
+        match crate::protocol::float::payload_width(value, self.state_txn.protocol()) {
+            2 => {
+                bytes.push((TAG_FLOAT << TAG_WIDTH) | float::BITS_16);
+                bytes.extend_from_slice(&half::f16::from_f64(value).to_le_bytes());
+            }
+            4 => {
+                bytes.push((TAG_FLOAT << TAG_WIDTH) | float::BITS_32);
+                bytes.extend_from_slice(&(value as f32).to_le_bytes());
+            }
+            _ => {
+                bytes.push((TAG_FLOAT << TAG_WIDTH) | float::BITS_64);
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
     }
 
     fn pack_null(&mut self, bytes: &mut Vec<u8>) {
