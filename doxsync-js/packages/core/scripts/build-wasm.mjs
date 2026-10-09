@@ -8,7 +8,7 @@ await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
 
 const result = spawnSync("wasm-pack", [
-  "build", fileURLToPath(new URL("../doxsync-rs/", root)),
+  "build", fileURLToPath(new URL("../../../doxsync-rs/crates/doxsync/", root)),
   "--target", "web",
   "--release",
   "--out-dir", fileURLToPath(new URL("wasm/", dist)),

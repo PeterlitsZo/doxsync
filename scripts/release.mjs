@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const npmName = '@doxsync/core';
 const npmRegistry = 'https://registry.npmjs.org/';
-const versionFiles = ['doxsync-rs/Cargo.toml', 'doxsync-rs/Cargo.lock', 'doxsync-js/package.json', 'doxsync-js/package-lock.json'];
+const versionFiles = ['doxsync-rs/crates/doxsync/Cargo.toml', 'doxsync-rs/Cargo.lock', 'doxsync-js/packages/core/package.json'];
 const releaseFiles = [...versionFiles, 'WIRE.md'];
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
@@ -100,30 +100,26 @@ async function prepare(directory) {
   }
   check(/^name\s*=\s*"doxsync"/m.test(packageSection) && manifest.name === npmName, `Rust package must be doxsync and npm package must be ${npmName}`);
   check(manifest.license === 'MIT OR Apache-2.0' && /^license\s*=\s*"MIT OR Apache-2.0"/m.test(packageSection), 'Both packages must declare MIT OR Apache-2.0');
-  for (const pkg of ['doxsync-rs', 'doxsync-js']) for (const license of ['LICENSE-MIT', 'LICENSE-APACHE']) {
+  for (const pkg of ['doxsync-rs/crates/doxsync', 'doxsync-js/packages/core']) for (const license of ['LICENSE-MIT', 'LICENSE-APACHE']) {
     check(existsSync(join(directory, pkg, license)), `Missing ${pkg}/${license}`);
   }
   writeFileSync(cargoPath, cargo.replace(packageSection, replaceVersion(packageSection, /^(version\s*=\s*)"[^"]+"/gm, 'Cargo package')));
   writeFileSync(lockPath, replaceVersion(readFileSync(lockPath, 'utf8'), /(^\[\[package\]\]\s*\nname = "doxsync"\s*\nversion = )"[^"]+"/gm, 'Cargo lock package'));
   manifest.version = version;
   writeFileSync(jsonPath, JSON.stringify(manifest, null, 2) + '\n');
-  const npmLockPath = join(directory, versionFiles[3]);
-  const npmLock = JSON.parse(readFileSync(npmLockPath, 'utf8'));
-  npmLock.version = version;
-  npmLock.packages[''].version = version;
-  writeFileSync(npmLockPath, JSON.stringify(npmLock, null, 2) + '\n');
 }
 function validate(directory) {
   const rust = join(directory, 'doxsync-rs');
-  const js = join(directory, 'doxsync-js');
-  run('cargo', ['test', '--locked'], rust);
-  run('cargo', ['publish', '--dry-run', '--locked', '--allow-dirty', '--registry', 'crates-io'], rust);
-  const crateFiles = new Set(run('cargo', ['package', '--list', '--locked', '--allow-dirty'], rust, true).split('\n'));
+  const workspace = join(directory, 'doxsync-js');
+  const js = join(workspace, 'packages/core');
+  run('cargo', ['test', '--workspace', '--locked'], rust);
+  run('cargo', ['publish', '-p', 'doxsync', '--dry-run', '--locked', '--allow-dirty', '--registry', 'crates-io'], rust);
+  const crateFiles = new Set(run('cargo', ['package', '-p', 'doxsync', '--list', '--locked', '--allow-dirty'], rust, true).split('\n'));
   for (const license of ['LICENSE-MIT', 'LICENSE-APACHE']) {
     check(crateFiles.has(license), `Rust package is missing ${license}`);
   }
-  run('npm', ['ci'], js);
-  run('npm', ['run', 'build'], js);
+  run('pnpm', ['install', '--frozen-lockfile'], workspace);
+  run('pnpm', ['run', 'build'], workspace);
   run('node', ['examples/node.mjs'], js);
   const info = JSON.parse(run('npm', ['pack', '--ignore-scripts', '--json'], js, true));
   check(info.length === 1 && info[0].name === npmName && info[0].version === version, 'Unexpected npm package identity');
@@ -159,7 +155,7 @@ try {
   check(versions.length === 1 && args.length === (dryRun ? 2 : 1) && parsedVersion, 'Usage: node scripts/release.mjs X.Y.Z[-PRERELEASE] [--dry-run]');
   const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
   check(nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 12), 'Node.js 22.12+ is required for Vite builds');
-  for (const tool of ['git', 'cargo', 'npm', 'wasm-pack']) run(tool, ['--version']);
+  for (const tool of ['git', 'cargo', 'npm', 'pnpm', 'wasm-pack']) run(tool, ['--version']);
   check(run('git', ['status', '--porcelain', '--untracked-files=all', '--', '.', ':(top,exclude)WIRE.md'], root, true) === '', 'Commit or stash all changes except WIRE.md before releasing');
   branch = run('git', ['symbolic-ref', '--short', 'HEAD'], root, true);
   run('git', ['remote', 'get-url', 'origin'], root, true);
@@ -198,7 +194,7 @@ try {
     stage = 'Git push';
     run('git', ['push', '--atomic', 'origin', `HEAD:refs/heads/${branch}`, `refs/tags/v${version}`]);
     stage = 'crates.io publish';
-    run('cargo', ['publish', '--locked', '--registry', 'crates-io'], join(root, 'doxsync-rs'));
+    run('cargo', ['publish', '-p', 'doxsync', '--locked', '--registry', 'crates-io'], join(root, 'doxsync-rs'));
     stage = 'npm publish';
     run('npm', ['publish', tarball, '--ignore-scripts', '--access', 'public', '--tag', npmTag, '--registry', npmRegistry]);
     console.log(`Released doxsync v${version} to crates.io and ${npmName}@${version} to npm.`);
@@ -215,7 +211,7 @@ try {
     console.error(`Run remaining steps from ${quote(root)} after fixing the error:`);
     if (stage === 'release tag') console.error(`git tag -a ${quote(`v${version}`)} -m ${quote(`Release v${version}.`)}`);
     if (['release tag', 'Git push'].includes(stage)) console.error(`git push --atomic origin ${quote(`HEAD:refs/heads/${branch}`)} ${quote(`refs/tags/v${version}`)}`);
-    if (stage !== 'npm publish') console.error('cargo publish --manifest-path doxsync-rs/Cargo.toml --locked --registry crates-io');
+    if (stage !== 'npm publish') console.error('cargo publish -p doxsync --manifest-path doxsync-rs/Cargo.toml --locked --registry crates-io');
     if (tarball) console.error(`npm publish ${quote(tarball)} --ignore-scripts --access public --tag ${quote(npmTag)} --registry ${npmRegistry}`);
     console.error('An upload timeout may still mean success. Check the registry version before retrying that upload.');
   }

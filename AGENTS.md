@@ -25,7 +25,7 @@ Before committing, you MUST:
   internal refactors that do not affect functionality. If you update
   `CHANGELOG.md`, you MUST ask the user to confirm that it looks correct before
   committing, and you MUST stage it explicitly.
-- Update `WIRE.md`.
+- Update `WIRE.md` if protocol changed.
 
 ### Git Commit Message
 

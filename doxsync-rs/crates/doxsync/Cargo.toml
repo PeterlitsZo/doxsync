@@ -1,0 +1,26 @@
+[package]
+name = "doxsync"
+version = "0.1.0-alpha.3"
+edition = "2024"
+description = "Stateful document synchronization with compact binary patches"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/PeterlitsZo/doxsync"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+wasm = ["dep:wasm-bindgen", "dep:js-sys"]
+
+[dependencies]
+blake3 = "1.8.7"
+half = { version = "2.7.1", default-features = false }
+rust_decimal = { version = "1.43", default-features = false, features = ["std"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "0.2.127", optional = true }
+js-sys = { version = "0.3.104", optional = true }
+
+[dev-dependencies]
+hex = "0.4.3"
+indoc = "2.0.7"

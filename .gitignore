@@ -4,6 +4,6 @@
 
 # Build and package artifacts.
 /doxsync-rs/target/
-/doxsync-js/dist/
-/doxsync-js/node_modules/
-/doxsync-js/*.tgz
+/doxsync-js/**/dist/
+/doxsync-js/**/node_modules/
+/doxsync-js/**/*.tgz
