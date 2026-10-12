@@ -99,7 +99,7 @@ impl PackedMessageDecoder {
                     state.apply_string_pool_patch(patch);
                 }
                 METADATA_BYTES => {
-                    if state.protocol() != Some(2) {
+                    if !state.protocol().is_some_and(|version| version >= 2) {
                         return Err(Error::new(
                             ErrorKind::InvalidData,
                             "bytes pool requires protocol 2",
@@ -195,7 +195,7 @@ impl PackedMessageDecoder {
     }
 
     fn unpack_bstr_ref(bytes: &mut &[u8], state: &ConsumerStateTxn) -> Result<Value> {
-        if state.protocol() != Some(2) {
+        if !state.protocol().is_some_and(|version| version >= 2) {
             return Err(Error::new(
                 ErrorKind::InvalidData,
                 "binary reference requires protocol 2",
@@ -374,7 +374,9 @@ impl PackedMessageDecoder {
 
     fn unpack_action(bytes: &mut &[u8], state: &ConsumerStateTxn) -> Result<Action> {
         let action_type = Self::unpack_varuint(bytes)?;
-        match action_type as u8 {
+        let action_type = u8::try_from(action_type)
+            .map_err(|_| Error::new(ErrorKind::InvalidData, "invalid action type"))?;
+        match action_type {
             ACTION_SNAPSHOT => {
                 let value = Self::unpack_value(bytes, state)?;
                 Ok(Action::Snapshot { value })
@@ -388,6 +390,34 @@ impl PackedMessageDecoder {
                 let path = Self::unpack_path_by_key(bytes, state)?;
                 let value = Self::unpack_value(bytes, state)?;
                 Ok(Action::Replace { path, value })
+            }
+            ACTION_TSTR_APPEND | ACTION_TSTR_PREPEND => {
+                if !state.protocol().is_some_and(|version| version >= 3) {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "string append/prepend requires protocol 3",
+                    ));
+                }
+                let path = Self::unpack_path_by_key(bytes, state)?;
+                let value = match bytes.first().map(|byte| byte >> TAG_WIDTH) {
+                    Some(TAG_TSTR) => Self::unpack_tstr(bytes)?,
+                    Some(TAG_TSTR_REF) => Self::unpack_tstr_ref(bytes, state)?,
+                    _ => {
+                        return Err(Error::new(
+                            ErrorKind::InvalidData,
+                            "expected a string fragment",
+                        ));
+                    }
+                };
+                let crate::ValueInner::TStr { inner } = value.inner() else {
+                    unreachable!("string decoder must return a string");
+                };
+                let value = inner.clone();
+                Ok(if action_type == ACTION_TSTR_APPEND {
+                    Action::TStrAppend { path, value }
+                } else {
+                    Action::TStrPrepend { path, value }
+                })
             }
             ACTION_DELETE => {
                 let path = Self::unpack_path_by_key(bytes, state)?;
@@ -495,7 +525,7 @@ impl PackedMessageDecoder {
             TAG_ARRAY => Self::unpack_array(bytes, state).map_err(|e| e.with_context("unpack array")),
             TAG_FLOAT => Self::unpack_simple_or_float(bytes, state).map_err(|e| e.with_context("unpack simple value or float")),
             TAG_POSDECIMAL | TAG_NEGDECIMAL => {
-                if state.protocol() != Some(2) {
+                if !state.protocol().is_some_and(|version| version >= 2) {
                     return Err(Error::new(ErrorKind::InvalidData, "decimal requires protocol 2"));
                 }
                 crate::protocol::decimal::decode(bytes)
@@ -793,7 +823,9 @@ impl PackedMessageDecoder {
                 *bytes = bytes.get(1..).ok_or_else(unexpected_end_of_value)?;
                 Ok(Value::inner_null())
             }
-            float::BITS_16 | float::BITS_32 if state.protocol() == Some(2) => {
+            float::BITS_16 | float::BITS_32
+                if state.protocol().is_some_and(|version| version >= 2) =>
+            {
                 Self::unpack_float(bytes)
             }
             float::BITS_64 => Self::unpack_float(bytes),

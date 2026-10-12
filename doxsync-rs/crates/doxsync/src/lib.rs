@@ -22,7 +22,7 @@ pub use producer::Producer;
 pub use rust_decimal::Decimal;
 pub use value::{Value, ValueKind};
 
-/// Returns all protocol versions supported by this build, currently `[1, 2]`.
+/// Returns all protocol versions supported by this build, currently `[1, 2, 3]`.
 ///
 /// Consumers can advertise this list to producers for protocol negotiation.
 pub fn supported_protocols() -> &'static [u32] {

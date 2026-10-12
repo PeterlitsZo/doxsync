@@ -21,6 +21,8 @@ pub(crate) const ACTION_ADD: u8 = 1;
 pub(crate) const ACTION_DELETE: u8 = 2;
 pub(crate) const ACTION_COPY: u8 = 3;
 pub(crate) const ACTION_REPLACE: u8 = 4;
+pub(crate) const ACTION_TSTR_APPEND: u8 = 5;
+pub(crate) const ACTION_TSTR_PREPEND: u8 = 6;
 
 pub(crate) mod posint {
     pub(crate) const INLINE: u8 = 11;
@@ -80,7 +82,7 @@ pub(crate) mod map {
 }
 
 /// Protocol versions implemented by this build.
-pub(crate) const SUPPORTED_PROTOCOLS: &[u32] = &[1, 2];
+pub(crate) const SUPPORTED_PROTOCOLS: &[u32] = &[1, 2, 3];
 
 pub(crate) const METADATA_PROTOCOL: u64 = 2;
 pub(crate) const METADATA_STRINGS: u64 = 0;

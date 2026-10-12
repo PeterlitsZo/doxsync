@@ -153,15 +153,25 @@ impl<'s> PoolPreparation<'s> {
         match action {
             Action::Snapshot { value } => {
                 visit_strings(value, &mut |string, _| self.prepare_string(string))?;
-                if self.txn.protocol() == 2 {
+                if self.txn.protocol() >= 2 {
                     visit_bytes(value, &mut |value| self.prepare_bytes(value))?;
                 }
             }
             Action::Add { path, value } | Action::Replace { path, value } => {
                 visit_strings(value, &mut |string, _| self.prepare_string(string))?;
-                if self.txn.protocol() == 2 {
+                if self.txn.protocol() >= 2 {
                     visit_bytes(value, &mut |value| self.prepare_bytes(value))?;
                 }
+                self.prepare_path(path)?;
+            }
+            Action::TStrAppend { path, value } | Action::TStrPrepend { path, value } => {
+                if self.txn.protocol() < 3 {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "string append/prepend requires protocol 3",
+                    ));
+                }
+                self.prepare_string(value)?;
                 self.prepare_path(path)?;
             }
             Action::Delete { path } => self.prepare_path(path)?,

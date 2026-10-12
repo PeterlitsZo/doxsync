@@ -80,6 +80,8 @@ pub(crate) fn action_tag(action: &crate::patch::Action) -> u64 {
         Action::Replace { .. } => ACTION_REPLACE,
         Action::Delete { .. } => ACTION_DELETE,
         Action::Copy { .. } => ACTION_COPY,
+        Action::TStrAppend { .. } => ACTION_TSTR_APPEND,
+        Action::TStrPrepend { .. } => ACTION_TSTR_PREPEND,
     }) as u64
 }
 

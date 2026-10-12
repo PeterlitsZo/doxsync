@@ -75,6 +75,10 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
                     self.pack_path_by_key(bytes, &Arc::new(path.clone()))?;
                     self.pack_value(bytes, value);
                 }
+                Action::TStrAppend { path, value } | Action::TStrPrepend { path, value } => {
+                    self.pack_path_by_key(bytes, &Arc::new(path.clone()))?;
+                    self.pack_tstr(bytes, value);
+                }
                 Action::Delete { path } => {
                     self.pack_path_by_key(bytes, &Arc::new(path.clone()))?;
                 }

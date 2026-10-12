@@ -1,10 +1,12 @@
 use crate::{
-    Result, Value, ValueKind,
+    Error, ErrorKind, Result, Value, ValueKind,
     patch::{Action, Path, PathSegment},
     protocol::ProjectedDocument,
 };
 
 use super::cost::CostSession;
+
+const TSTR_DIFF_BYTES_LIMIT: usize = 65535;
 
 pub(super) struct Differ<'d, 'c, 's> {
     old: &'d ProjectedDocument,
@@ -24,28 +26,31 @@ impl<'d, 'c, 's> Differ<'d, 'c, 's> {
         )
     }
 
-    /// Appends the cheaper encodable action, preferring the direct action on ties.
-    fn choose_action(&mut self, direct: Action, copy: Option<Action>) -> Result<Action> {
-        let Some(copy) = copy else {
-            self.cost.append(&direct)?;
-            return Ok(direct);
-        };
-
-        // Compare both actions after the same prefix, then append only the winner.
+    /// Appends the cheapest encodable candidate, preferring earlier candidates on ties.
+    fn choose_action(&mut self, actions: &[Action]) -> Result<Action> {
         let point = self.cost.savepoint();
-        let direct_cost = self.cost.append(&direct).map(|()| self.cost.encoded_len());
-        self.cost.rollback_to(point);
-        let copy_cost = self.cost.append(&copy).map(|()| self.cost.encoded_len());
-        self.cost.rollback_to(point);
-
-        let action = match (direct_cost, copy_cost) {
-            (Ok(direct_len), Ok(copy_len)) if copy_len < direct_len => copy,
-            (Ok(_), _) => direct,
-            (Err(_), Ok(_)) => copy,
-            (Err(error), Err(_)) => return Err(error),
+        let mut best = None;
+        let mut first_error = None;
+        for action in actions {
+            match self.cost.append(action) {
+                Ok(()) => {
+                    let len = self.cost.encoded_len();
+                    if best.is_none_or(|(_, best_len)| len < best_len) {
+                        best = Some((action, len));
+                    }
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+            self.cost.rollback_to(point);
+        }
+        let Some((action, _)) = best else {
+            return Err(first_error
+                .unwrap_or_else(|| Error::new(ErrorKind::InvalidData, "no action candidates")));
         };
-        self.cost.append(&action)?;
-        Ok(action)
+        self.cost.append(action)?;
+        Ok(action.clone())
     }
 
     fn diff_value(
@@ -59,6 +64,8 @@ impl<'d, 'c, 's> Differ<'d, 'c, 's> {
                 return self.diff_map(path, old_value, new_value);
             } else if old_value.kind() == ValueKind::Array && new_value.kind() == ValueKind::Array {
                 return self.diff_array(path, old_value, new_value);
+            } else if old_value.kind() == ValueKind::TStr && new_value.kind() == ValueKind::TStr {
+                return self.diff_tstr(path, old_value, new_value);
             }
         }
 
@@ -84,7 +91,65 @@ impl<'d, 'c, 's> Differ<'d, 'c, 's> {
                     from: entry.path.clone(),
                 }
             });
-        Ok(vec![self.choose_action(action, copy)?])
+        let mut candidates = vec![action];
+        candidates.extend(copy);
+        Ok(vec![self.choose_action(&candidates)?])
+    }
+
+    fn diff_tstr(
+        &mut self,
+        path: Path,
+        old_value: &Value,
+        new_value: &Value,
+    ) -> Result<Vec<Action>> {
+        let old = old_value.as_tstr().expect("must be a string");
+        let new = new_value.as_tstr().expect("must be a string");
+        let array_element = matches!(path.segments().last(), Some(PathSegment::Index(_)));
+        let direct = if path.is_empty() {
+            Action::Snapshot {
+                value: new_value.clone(),
+            }
+        } else if array_element {
+            Action::Replace {
+                path: path.clone(),
+                value: new_value.clone(),
+            }
+        } else {
+            Action::Add {
+                path: path.clone(),
+                value: new_value.clone(),
+            }
+        };
+        let mut candidates = vec![direct];
+        // Copy inserts at an array destination, so it cannot replace an existing element.
+        if !array_element {
+            if let Some(entry) = self.old.document().index().get(&new_value.hash()) {
+                debug_assert_eq!(&entry.value, new_value);
+                candidates.push(Action::Copy {
+                    path: path.clone(),
+                    from: entry.path.clone(),
+                });
+            }
+        }
+        if self.cost.protocol() >= 3
+            && old.len() <= TSTR_DIFF_BYTES_LIMIT
+            && new.len() <= TSTR_DIFF_BYTES_LIMIT
+            && old.len() < new.len()
+        {
+            if let Some(fragment) = new.strip_prefix(old) {
+                candidates.push(Action::TStrAppend {
+                    path: path.clone(),
+                    value: std::sync::Arc::new(fragment.to_owned()),
+                });
+            }
+            if let Some(fragment) = new.strip_suffix(old) {
+                candidates.push(Action::TStrPrepend {
+                    path,
+                    value: std::sync::Arc::new(fragment.to_owned()),
+                });
+            }
+        }
+        Ok(vec![self.choose_action(&candidates)?])
     }
 
     fn diff_array(
@@ -107,7 +172,10 @@ impl<'d, 'c, 's> Differ<'d, 'c, 's> {
             match old_value {
                 Some(old_value)
                     if old_value.kind() != new_value.kind()
-                        || !matches!(new_value.kind(), ValueKind::Map | ValueKind::Array) =>
+                        || !matches!(
+                            new_value.kind(),
+                            ValueKind::Map | ValueKind::Array | ValueKind::TStr
+                        ) =>
                 {
                     let action = Action::Replace {
                         path,

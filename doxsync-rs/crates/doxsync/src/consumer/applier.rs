@@ -1,4 +1,7 @@
-use crate::{Document, Error, ErrorKind, Message, Result, Value, patch::{Action, PathSegment}};
+use crate::{
+    Document, Error, ErrorKind, Message, Result, Value,
+    patch::{Action, PathSegment},
+};
 
 pub(super) struct Applier<'d> {
     document: Option<&'d Document>,
@@ -42,6 +45,18 @@ impl<'d> Applier<'d> {
                         "cannot replace in an uninitialized document",
                     ))?;
                     to_updated = Some(self.apply_replace(current, path.segments(), value)?);
+                }
+                Action::TStrAppend { path, value } | Action::TStrPrepend { path, value } => {
+                    let current = to_updated.as_ref().ok_or(Error::new(
+                        ErrorKind::InvalidData,
+                        "cannot modify a string in an uninitialized document",
+                    ))?;
+                    to_updated = Some(self.apply_tstr(
+                        current,
+                        path.segments(),
+                        value,
+                        matches!(action, Action::TStrPrepend { .. }),
+                    )?);
                 }
                 Action::Delete { path } => {
                     let value = to_updated.as_ref().ok_or(Error::new(
@@ -130,8 +145,51 @@ impl<'d> Applier<'d> {
         }
     }
 
-    fn apply_copy(&self, current: &Value, path: &[PathSegment], from: &[PathSegment]) -> Result<Value> {
-        let mut value = &self.document
+    fn apply_tstr(
+        &self,
+        current: &Value,
+        path: &[PathSegment],
+        fragment: &str,
+        prepend: bool,
+    ) -> Result<Value> {
+        let Some((segment, remaining)) = path.split_first() else {
+            return current.as_tstr_and_modify(|string| {
+                if prepend {
+                    string.insert_str(0, fragment);
+                } else {
+                    string.push_str(fragment);
+                }
+                Ok(())
+            });
+        };
+        match segment {
+            PathSegment::Key(key) => current.as_map_and_modify(|map| {
+                let child = map.get_mut(key).ok_or(Error::new(
+                    ErrorKind::InvalidData,
+                    "string target does not exist",
+                ))?;
+                *child = self.apply_tstr(child, remaining, fragment, prepend)?;
+                Ok(())
+            }),
+            PathSegment::Index(index) => current.as_array_and_modify(|array| {
+                let child = array.get_mut(*index).ok_or(Error::new(
+                    ErrorKind::InvalidData,
+                    "string target does not exist",
+                ))?;
+                *child = self.apply_tstr(child, remaining, fragment, prepend)?;
+                Ok(())
+            }),
+        }
+    }
+
+    fn apply_copy(
+        &self,
+        current: &Value,
+        path: &[PathSegment],
+        from: &[PathSegment],
+    ) -> Result<Value> {
+        let mut value = &self
+            .document
             .ok_or(Error::new(
                 ErrorKind::InvalidData,
                 "copy source path does not exist",

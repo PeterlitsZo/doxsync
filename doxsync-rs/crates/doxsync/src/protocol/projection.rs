@@ -121,7 +121,10 @@ fn lower_action_decimals(action: &Action) -> Option<Action> {
             path: path.clone(),
             value,
         }),
-        Action::Delete { .. } | Action::Copy { .. } => None,
+        Action::Delete { .. }
+        | Action::Copy { .. }
+        | Action::TStrAppend { .. }
+        | Action::TStrPrepend { .. } => None,
     }
 }
 

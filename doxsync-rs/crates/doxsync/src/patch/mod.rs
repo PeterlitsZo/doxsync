@@ -35,6 +35,12 @@ pub(crate) enum Action {
         path: Path,
     },
 
+    /// Appends a fragment to an existing string in place.
+    TStrAppend { path: Path, value: Arc<String> },
+
+    /// Prepends a fragment to an existing string in place.
+    TStrPrepend { path: Path, value: Arc<String> },
+
     /// Copies the value at the given path to another path.
     Copy {
         /// The path to copy the value to.

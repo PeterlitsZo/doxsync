@@ -73,6 +73,10 @@ impl<'s> CostSession<'s> {
         }
     }
 
+    pub(super) fn protocol(&self) -> u32 {
+        self.protocol
+    }
+
     pub(super) fn savepoint(&self) -> CostSavepoint {
         CostSavepoint {
             pools: self.pools.savepoint(),
@@ -106,6 +110,10 @@ impl<'s> CostSession<'s> {
             Action::Add { path, value } | Action::Replace { path, value } => {
                 cost += self.path_cost(path);
                 cost += self.value_cost(value)?;
+            }
+            Action::TStrAppend { path, value } | Action::TStrPrepend { path, value } => {
+                cost += self.path_cost(path);
+                cost += tstr_encoded_len(value.len(), self.pools.string_key(value));
             }
             Action::Delete { path } => cost += self.path_cost(path),
             Action::Copy { path, from } => {
