@@ -11,6 +11,13 @@
 - If the latest protocol version in `WIRE.md` lists only `[UNRELEASED]`,
   apply protocol changes to that version instead of creating a new version.
 
+## When You Need to Release
+
+- For stable releases (not prereleases such as alpha, beta, or release
+  candidates), update `CHANGELOG.md`.
+- Update `WIRE.md`, replacing `[UNRELEASED]` with the version being released.
+- Use `scripts/release.mjs` to publish the new version.
+
 ## When You Need to Commit
 
 WHEN THE USER ASKS YOU TO COMMIT, you MUST follow this section.
