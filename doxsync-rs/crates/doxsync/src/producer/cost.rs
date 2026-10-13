@@ -165,7 +165,29 @@ impl<'s> CostSession<'s> {
                 .ok_or_else(|| Error::new(ErrorKind::InvalidData, "value cost too large"))?;
             Ok(())
         })?;
+        if self.protocol >= 4 {
+            cost -= self.aoo_savings(value);
+        }
         Ok(cost)
+    }
+
+    // Pools remain pinned throughout preparation. Column layout changes only
+    // structure and scalar numeric payloads, so nested savings are additive and
+    // ordinary string/binary costs remain valid. Reuse the encoder's planner.
+    fn aoo_savings(&self, value: &Value) -> usize {
+        match value.inner() {
+            ValueInner::Array { inner } => {
+                let savings = crate::protocol::aoo::plan(inner, |key| self.pools.string_key(key))
+                    .map_or(0, |plan| plan.savings);
+                savings
+                    + inner
+                        .iter()
+                        .map(|value| self.aoo_savings(value))
+                        .sum::<usize>()
+            }
+            ValueInner::Map { inner } => inner.values().map(|value| self.aoo_savings(value)).sum(),
+            _ => 0,
+        }
     }
 
     pub(super) fn encoded_len(&self) -> usize {

@@ -30,7 +30,7 @@ function requireInitialized() {
 }
 
 /**
- * Returns all protocol versions supported by this build, currently [1, 2, 3].
+ * Returns all protocol versions supported by this build, currently [1, 2, 3, 4].
  * Requires await init(). Each call returns an independent ordinary array.
  * Consumers can advertise this list to producers for protocol negotiation.
  */
@@ -45,10 +45,10 @@ export class Producer {
   /**
    * Copies the value into WASM and selects the highest common protocol version.
    * protocols lists the consumer's supported versions as u32 integers.
-   * Versions 1, 2, and 3 are supported. Missing, invalid, empty, or incompatible
+   * Versions 1, 2, 3, and 4 are supported. Missing, invalid, empty, or incompatible
    * lists throw InvalidData errors. Order and duplicates do not matter.
-   * Protocol 1 transmits Decimal values as strings; protocols 2 and 3 preserve the type.
-   * Protocols 2 and 3 also pool binary values; both peers must support that extension.
+   * Protocol 1 transmits Decimal values as strings; protocols 2 through 4 preserve the type.
+   * Protocols 2 through 4 also pool binary values; both peers must support that extension.
    */
   constructor(value: SyncValue, protocols: readonly number[]) {
     requireInitialized();
@@ -96,7 +96,7 @@ export class Consumer {
   }
 
   /**
-   * Applies one complete message. The first message must declare protocol 1, 2, or 3.
+   * Applies one complete message. The first message must declare protocol 1, 2, 3, or 4.
    * Failures leave the document, pools, and protocol state intact.
    */
   consumeDiff(bytes: Uint8Array): void {
@@ -104,7 +104,7 @@ export class Consumer {
   }
 
   /** Returns an independent copy, or undefined before the first snapshot.
-   * Protocol 2 and 3 decimals become decimal.js instances; their original scale is lost.
+   * Protocol 2 through 4 decimals become decimal.js instances; their original scale is lost.
    */
   document(): SyncValue | undefined {
     return this.#live().document(decimalFromString);

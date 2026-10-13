@@ -573,6 +573,7 @@ impl PackedMessageDecoder {
             TAG_BSTR => Self::unpack_bstr(bytes).map_err(|e| e.with_context("unpack binary string")),
             TAG_TSTR => Self::unpack_tstr(bytes).map_err(|e| e.with_context("unpack text string")),
             TAG_TSTR_REF => Self::unpack_tstr_ref(bytes, state).map_err(|e| e.with_context("unpack text string reference")),
+            TAG_AOO => Self::unpack_aoo(bytes, state).map_err(|e| e.with_context("unpack AOO")),
             TAG_ARRAY => Self::unpack_array(bytes, state).map_err(|e| e.with_context("unpack array")),
             TAG_FLOAT => Self::unpack_simple_or_float(bytes, state).map_err(|e| e.with_context("unpack simple value or float")),
             TAG_POSDECIMAL | TAG_NEGDECIMAL => {
@@ -982,6 +983,173 @@ impl PackedMessageDecoder {
         Ok(Value::inner_array(value))
     }
 
+    fn unpack_aoo(bytes: &mut &[u8], state: &ConsumerStateTxn) -> Result<Value> {
+        use crate::protocol::aoo::*;
+        if !state.protocol().is_some_and(|version| version >= 4) {
+            return Err(invalid("AOO requires protocol 4"));
+        }
+        if take_byte(bytes)? != TAG_AOO << TAG_WIDTH {
+            return Err(invalid("invalid AOO header"));
+        }
+        let row_count = usize::try_from(Self::unpack_varuint(bytes)?)
+            .map_err(|_| invalid("AOO row count overflow"))?;
+        let column_count = usize::try_from(Self::unpack_varuint(bytes)?)
+            .map_err(|_| invalid("AOO column count overflow"))?;
+        if row_count == 0
+            || row_count > ROWS_LIMIT
+            || column_count > COLUMNS_LIMIT
+            || row_count
+                .checked_mul(column_count)
+                .is_none_or(|cells| cells > CELLS_LIMIT)
+            || (column_count == 0 && row_count > EMPTY_ROWS_LIMIT)
+        {
+            return Err(invalid("AOO dimensions exceed limits"));
+        }
+        if column_count > bytes.len() / 3
+            || (column_count > 0 && row_count.div_ceil(8) > bytes.len())
+        {
+            return Err(invalid("truncated AOO columns"));
+        }
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(row_count)
+            .map_err(|_| invalid("AOO allocation failed"))?;
+        rows.resize_with(row_count, BTreeMap::new);
+        let mut previous_key: Option<Arc<String>> = None;
+        let mut entries = 0usize;
+        for _ in 0..column_count {
+            let key = Self::unpack_map_key(bytes, state)?;
+            if previous_key
+                .as_ref()
+                .is_some_and(|previous| previous >= &key)
+            {
+                return Err(invalid("AOO keys must be strictly increasing"));
+            }
+            previous_key = Some(key.clone());
+            let mode = take_byte(bytes)?;
+            match mode {
+                DENSE_VALUES | SPARSE_VALUES => {
+                    let bitmap = if mode == SPARSE_VALUES {
+                        let len = row_count.div_ceil(8);
+                        let bitmap = bytes
+                            .get(..len)
+                            .ok_or_else(|| invalid("truncated AOO bitmap"))?;
+                        *bytes = &bytes[len..];
+                        if row_count % 8 != 0 && bitmap[len - 1] >> (row_count % 8) != 0 {
+                            return Err(invalid("nonzero unused AOO bitmap bits"));
+                        }
+                        Some(bitmap)
+                    } else {
+                        None
+                    };
+                    let count = bitmap.map_or(row_count, |bitmap| {
+                        bitmap.iter().map(|byte| byte.count_ones() as usize).sum()
+                    });
+                    if count == 0 || count > bytes.len() {
+                        return Err(invalid("empty or truncated AOO column"));
+                    }
+                    entries = entries
+                        .checked_add(count)
+                        .filter(|count| *count <= ENTRIES_LIMIT)
+                        .ok_or_else(|| invalid("too many AOO entries"))?;
+                    for (index, row) in rows.iter_mut().enumerate() {
+                        if bitmap.is_none_or(|bitmap| bitmap[index / 8] & (1 << (index % 8)) != 0) {
+                            row.insert(key.clone(), Self::unpack_value(bytes, state)?);
+                        }
+                    }
+                }
+                DENSE_INT_DELTA | DENSE_DECIMAL_DELTA => {
+                    entries = entries
+                        .checked_add(row_count)
+                        .filter(|count| *count <= ENTRIES_LIMIT)
+                        .ok_or_else(|| invalid("too many AOO entries"))?;
+                    let (scale, mut previous) = if mode == DENSE_INT_DELTA {
+                        let first = match bytes.first().map(|byte| byte >> TAG_WIDTH) {
+                            Some(TAG_POSINT) => Self::unpack_posint(bytes)?,
+                            Some(TAG_NEGINT) => Self::unpack_negint(bytes)?,
+                            _ => return Err(invalid("invalid AOO integer first value")),
+                        };
+                        (None, integer(&first).expect("decoded integer"))
+                    } else {
+                        let scale = u32::from(take_byte(bytes)?);
+                        if scale > crate::Decimal::MAX_SCALE {
+                            return Err(invalid("invalid AOO decimal scale"));
+                        }
+                        (Some(scale), decode_signed(bytes, 97)?)
+                    };
+                    if row_count - 1 > bytes.len() {
+                        return Err(invalid("truncated AOO deltas"));
+                    }
+                    for (index, row) in rows.iter_mut().enumerate() {
+                        if index > 0 {
+                            let delta =
+                                decode_signed(bytes, if scale.is_some() { 98 } else { 64 })?;
+                            previous = previous
+                                .checked_add(delta)
+                                .ok_or_else(|| invalid("AOO delta overflow"))?;
+                        }
+                        let value = if let Some(scale) = scale {
+                            let coefficient = previous.unsigned_abs();
+                            if coefficient > (1u128 << 96) - 1 {
+                                return Err(invalid("AOO decimal coefficient overflow"));
+                            }
+                            Value::inner_decimal(crate::Decimal::from_parts(
+                                coefficient as u32,
+                                (coefficient >> 32) as u32,
+                                (coefficient >> 64) as u32,
+                                previous < 0,
+                                scale,
+                            ))
+                        } else {
+                            integer_value(previous)?
+                        };
+                        row.insert(key.clone(), value);
+                    }
+                }
+                _ => return Err(invalid("unknown AOO column mode")),
+            }
+        }
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(row_count)
+            .map_err(|_| invalid("AOO allocation failed"))?;
+        values.extend(rows.into_iter().map(Value::inner_map));
+        Ok(Value::inner_array(values))
+    }
+
+    fn unpack_map_key(bytes: &mut &[u8], state: &ConsumerStateTxn) -> Result<Arc<String>> {
+        let key = Self::unpack_varuint(bytes).map_err(|e| e.with_context("unpack map key"))?;
+        let key_payload = key >> 2;
+        let key = match key & 0b11 {
+            0b00 => {
+                let key = u32::try_from(key_payload)
+                    .map_err(|_| Error::new(ErrorKind::InvalidData, "map key too large"))?;
+                state.get_string(key).cloned().ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidData, "map key not found in string pool")
+                        .with_metadata("key", key)
+                })?
+            }
+            0b01 => {
+                let key_len = usize::try_from(key_payload)
+                    .map_err(|_| Error::new(ErrorKind::InvalidData, "map key too large"))?;
+                let key_bytes = bytes.get(..key_len).ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidData, "truncated map key")
+                        .with_metadata("key_len", key_len)
+                })?;
+                let key = std::str::from_utf8(key_bytes)
+                    .map_err(|_| Error::new(ErrorKind::InvalidData, "invalid UTF-8 map key"))?;
+                let key = Arc::new(key.to_owned());
+                *bytes = bytes
+                    .get(key_len..)
+                    .ok_or_else(|| Error::new(ErrorKind::InvalidData, "truncated map key"))?;
+                key
+            }
+            _ => {
+                return Err(Error::new(ErrorKind::InvalidData, "invalid map key type"));
+            }
+        };
+        Ok(key)
+    }
+
     fn unpack_map(bytes: &mut &[u8], state: &ConsumerStateTxn) -> Result<Value> {
         fn unexpected_end_of_value() -> Error {
             Error::new(ErrorKind::InvalidData, "unexpected end of value")
@@ -1033,43 +1201,8 @@ impl PackedMessageDecoder {
 
         let mut value = BTreeMap::new();
         for index in 0..value_len {
-            let key = Self::unpack_varuint(bytes).map_err(|e| e.with_context("unpack map key"))?;
-            let key_payload = key >> 2;
-            let key = match key & 0b11 {
-                0b00 => {
-                    let key = u32::try_from(key_payload).map_err(|_| {
-                        Error::new(ErrorKind::InvalidData, "map key too large")
-                            .with_metadata("index", index)
-                    })?;
-                    state.get_string(key).cloned().ok_or_else(|| {
-                        Error::new(ErrorKind::InvalidData, "map key not found in string pool")
-                            .with_metadata("index", index)
-                            .with_metadata("key", key)
-                    })?
-                }
-                0b01 => {
-                    let key_len = usize::try_from(key_payload).map_err(|_| {
-                        Error::new(ErrorKind::InvalidData, "map key too large")
-                            .with_metadata("index", index)
-                    })?;
-                    let key_bytes = bytes.get(..key_len).ok_or_else(|| {
-                        unexpected_end_of_value()
-                            .with_metadata("index", index)
-                            .with_metadata("key_len", key_len)
-                    })?;
-                    let key = std::str::from_utf8(key_bytes).map_err(|_| {
-                        Error::new(ErrorKind::InvalidData, "invalid UTF-8 map key")
-                            .with_metadata("index", index)
-                    })?;
-                    let key = Arc::new(key.to_owned());
-                    *bytes = bytes.get(key_len..).ok_or_else(unexpected_end_of_value)?;
-                    key
-                }
-                _ => {
-                    return Err(Error::new(ErrorKind::InvalidData, "invalid map key type")
-                        .with_metadata("index", index));
-                }
-            };
+            let key =
+                Self::unpack_map_key(bytes, state).map_err(|e| e.with_metadata("index", index))?;
 
             let item_value =
                 Self::unpack_value(bytes, state).map_err(|e| e.with_context("unpack map value"))?;

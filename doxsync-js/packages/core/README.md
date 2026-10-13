@@ -66,7 +66,10 @@ const price = new Decimal("12.34");
 
 Decimals must be finite, fit a 96-bit coefficient, and have scale 0–28;
 unsupported values are rejected without rounding. Trailing zeros are not preserved.
-Protocol 1 delivers decimals as strings; protocols 2 and 3 preserve Decimal values.
+Protocol 1 delivers decimals as strings; protocols 2 through 4 preserve Decimal values.
+Protocol 4 automatically uses shared-key columns and integer/decimal deltas for
+arrays of objects when they reduce the encoded size. Older peers retain the
+ordinary array encoding.
 The producer automatically selects the highest version supported by both peers.
 
 Errors may expose `kind`: `InvalidData`, `UnexpectedType`, or `Internal`.

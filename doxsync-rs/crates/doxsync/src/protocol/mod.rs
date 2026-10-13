@@ -1,5 +1,6 @@
 //! Protocol representation policy, shared wire rules, and pool preparation.
 
+pub(crate) mod aoo;
 pub(crate) mod consts;
 pub(crate) mod decimal;
 pub(crate) mod float;

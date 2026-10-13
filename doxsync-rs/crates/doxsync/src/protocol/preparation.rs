@@ -20,7 +20,8 @@ use super::{
     visit_bytes, visit_strings,
 };
 
-/// Definitions in their first-use order. No encoded payloads are allocated.
+/// Definitions in logical first-use order, independent of AOO column layout.
+/// No encoded payloads are allocated.
 #[derive(Default)]
 pub(crate) struct PreparedPools {
     pub(crate) bytes: Vec<(u32, Arc<Vec<u8>>)>,

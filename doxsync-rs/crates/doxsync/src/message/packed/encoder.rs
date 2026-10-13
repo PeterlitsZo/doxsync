@@ -373,6 +373,14 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
     }
 
     fn pack_array(&mut self, bytes: &mut Vec<u8>, value: &[Value]) {
+        if self.state_txn.protocol() >= 4 {
+            if let Some(plan) =
+                crate::protocol::aoo::plan(value, |key| self.state_txn.get_string_key(key))
+            {
+                self.pack_aoo(bytes, value.len(), plan);
+                return;
+            }
+        }
         let value_len = value.len();
 
         let width = payload_width(value_len as u64, array::INLINE);
@@ -397,6 +405,72 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
         }
     }
 
+    fn pack_key(&mut self, bytes: &mut Vec<u8>, key: &Arc<String>) {
+        if let Some(key) = self.state_txn.get_string_key(key) {
+            self.pack_varuint(bytes, (key as u64) << 2);
+        } else {
+            self.pack_varuint(bytes, (key.len() as u64) << 2 | 1);
+            bytes.extend_from_slice(key.as_bytes());
+        }
+    }
+
+    fn pack_aoo(
+        &mut self,
+        bytes: &mut Vec<u8>,
+        rows: usize,
+        column_plan: crate::protocol::aoo::Plan<'_>,
+    ) {
+        use crate::protocol::aoo::*;
+        bytes.push(TAG_AOO << TAG_WIDTH);
+        self.pack_varuint(bytes, rows as u64);
+        self.pack_varuint(bytes, column_plan.columns.len() as u64);
+        for column in column_plan.columns {
+            self.pack_key(bytes, column.key);
+            bytes.push(column.mode);
+            match column.mode {
+                SPARSE_VALUES | DENSE_VALUES => {
+                    if column.mode == SPARSE_VALUES {
+                        let start = bytes.len();
+                        bytes.resize(start + rows.div_ceil(8), 0);
+                        for (row, _) in &column.entries {
+                            bytes[start + row / 8] |= 1 << (row % 8);
+                        }
+                    }
+                    for (_, value) in column.entries {
+                        self.pack_value(bytes, value);
+                    }
+                }
+                DENSE_INT_DELTA | DENSE_DECIMAL_DELTA => {
+                    let first = column.entries[0].1;
+                    let mut previous = if column.mode == DENSE_INT_DELTA {
+                        self.pack_value(bytes, first);
+                        integer(first).expect("planned integer")
+                    } else {
+                        let crate::ValueInner::Decimal { inner } = first.inner() else {
+                            unreachable!()
+                        };
+                        bytes.push(inner.scale() as u8);
+                        encode_signed(bytes, inner.mantissa());
+                        inner.mantissa()
+                    };
+                    for (_, value) in &column.entries[1..] {
+                        let next = if column.mode == DENSE_INT_DELTA {
+                            integer(value).expect("planned integer")
+                        } else {
+                            let crate::ValueInner::Decimal { inner } = value.inner() else {
+                                unreachable!()
+                            };
+                            inner.mantissa()
+                        };
+                        encode_signed(bytes, next - previous);
+                        previous = next;
+                    }
+                }
+                _ => unreachable!("planned column mode"),
+            }
+        }
+    }
+
     fn pack_map(&mut self, bytes: &mut Vec<u8>, value: &BTreeMap<Arc<String>, Value>) {
         let value_len = value.len();
 
@@ -418,12 +492,7 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
         }
 
         for (key, value) in value.iter() {
-            if let Some(key) = self.state_txn.get_string_key(key) {
-                self.pack_varuint(bytes, (key as u64) << 2 | 0b00);
-            } else {
-                self.pack_varuint(bytes, (key.len() as u64) << 2 | 0b01);
-                bytes.extend_from_slice(key.as_bytes());
-            }
+            self.pack_key(bytes, key);
             self.pack_value(bytes, value);
         }
     }
