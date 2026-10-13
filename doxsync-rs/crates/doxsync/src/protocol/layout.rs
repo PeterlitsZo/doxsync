@@ -75,6 +75,7 @@ pub(crate) fn action_tag(action: &crate::patch::Action) -> u64 {
     use crate::patch::Action;
 
     (match action {
+        Action::ArrayPatch { .. } => ACTION_ARRAY_PATCH,
         Action::Snapshot { .. } => ACTION_SNAPSHOT,
         Action::Add { .. } => ACTION_ADD,
         Action::Replace { .. } => ACTION_REPLACE,

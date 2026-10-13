@@ -5,7 +5,7 @@ use std::{
 
 use super::PackedMessage;
 use crate::message::Message;
-use crate::patch::{Action, Path, PathSegment};
+use crate::patch::{Action, ArrayPatchEdit, Path, PathSegment};
 use crate::protocol::consts::*;
 use crate::state::{
     BYTES_POOL_CAPACITY, BYTES_POOL_ENTRY_BYTES_LIMIT, BYTES_POOL_PATCH_BYTES_LIMIT,
@@ -372,6 +372,11 @@ impl PackedMessageDecoder {
         Ok(value as u64)
     }
 
+    fn unpack_usize(bytes: &mut &[u8]) -> Result<usize> {
+        usize::try_from(Self::unpack_varuint(bytes)?)
+            .map_err(|_| Error::new(ErrorKind::InvalidData, "array patch integer too large"))
+    }
+
     fn unpack_action(bytes: &mut &[u8], state: &ConsumerStateTxn) -> Result<Action> {
         let action_type = Self::unpack_varuint(bytes)?;
         let action_type = u8::try_from(action_type)
@@ -418,6 +423,52 @@ impl PackedMessageDecoder {
                 } else {
                     Action::TStrPrepend { path, value }
                 })
+            }
+            ACTION_ARRAY_PATCH => {
+                if !state.protocol().is_some_and(|version| version >= 3) {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "array patch requires protocol 3",
+                    ));
+                }
+                let path = Self::unpack_path_by_key(bytes, state)?;
+                let count = Self::unpack_usize(bytes)?;
+                // Every edit needs at least three one-byte varuints.
+                if count > bytes.len() / 3 {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "truncated array patch edits",
+                    ));
+                }
+                let mut edits = Vec::new();
+                edits.try_reserve_exact(count).map_err(|_| {
+                    Error::new(ErrorKind::InvalidData, "array patch allocation too large")
+                })?;
+                for _ in 0..count {
+                    let start = Self::unpack_usize(bytes)?;
+                    let delete_count = Self::unpack_usize(bytes)?;
+                    let value_count = Self::unpack_usize(bytes)?;
+                    if value_count > bytes.len() {
+                        return Err(Error::new(
+                            ErrorKind::InvalidData,
+                            "truncated array patch values",
+                        ));
+                    }
+                    let mut values = Vec::new();
+                    values.try_reserve_exact(value_count).map_err(|_| {
+                        Error::new(ErrorKind::InvalidData, "array patch allocation too large")
+                    })?;
+                    for _ in 0..value_count {
+                        values.push(Self::unpack_value(bytes, state)?);
+                    }
+                    edits.push(ArrayPatchEdit {
+                        start,
+                        delete_count,
+                        values,
+                    });
+                }
+                ArrayPatchEdit::validate(&edits)?;
+                Ok(Action::ArrayPatch { path, edits })
             }
             ACTION_DELETE => {
                 let path = Self::unpack_path_by_key(bytes, state)?;

@@ -4,6 +4,7 @@ use crate::protocol::{
 use crate::state::ProducerStateTxn;
 use crate::{Document, Error, ErrorKind, Message, PackedMessage, ProducerState, Result};
 
+mod array_diff;
 mod cost;
 mod differ;
 mod planning;

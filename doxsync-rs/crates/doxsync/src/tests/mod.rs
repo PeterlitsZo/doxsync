@@ -335,9 +335,12 @@ fn test_produce_then_consume_003() {
         &mut producer,
         &mut consumer,
         &document,
-        &[Action::snapshot(value!({
-            "users": [{ "age": 42, "name": "Peterlits Zo" }]
-        }).unwrap())],
+        &[Action::snapshot(
+            value!({
+                "users": [{ "age": 42, "name": "Peterlits Zo" }]
+            })
+            .unwrap(),
+        )],
     );
 
     // Case 2:

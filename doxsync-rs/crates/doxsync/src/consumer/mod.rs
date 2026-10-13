@@ -23,9 +23,7 @@ impl Consumer {
     pub fn consume_diff(&mut self, diff: PackedMessage) -> Result<()> {
         let mut state_txn = self.state.take().expect("consumer state").txn();
         let result = Message::decode(diff, &mut state_txn)
-            .and_then(|message| {
-                applier::Applier::new(self.document.as_ref()).apply(&message)
-            });
+            .and_then(|message| applier::Applier::new(self.document.as_ref()).apply(&message));
 
         match result {
             Ok(document) => {

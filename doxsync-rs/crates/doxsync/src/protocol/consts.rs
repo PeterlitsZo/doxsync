@@ -23,6 +23,7 @@ pub(crate) const ACTION_COPY: u8 = 3;
 pub(crate) const ACTION_REPLACE: u8 = 4;
 pub(crate) const ACTION_TSTR_APPEND: u8 = 5;
 pub(crate) const ACTION_TSTR_PREPEND: u8 = 6;
+pub(crate) const ACTION_ARRAY_PATCH: u8 = 7;
 
 pub(crate) mod posint {
     pub(crate) const INLINE: u8 = 11;

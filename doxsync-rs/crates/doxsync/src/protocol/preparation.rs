@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     Error, ErrorKind, Result,
-    patch::{Action, Path, PathSegment},
+    patch::{Action, ArrayPatchEdit, Path, PathSegment},
     state::{
         BYTES_POOL_CAPACITY, BYTES_POOL_ENTRY_BYTES_LIMIT, BYTES_POOL_PATCH_BYTES_LIMIT,
         InsertPathResult, InsertStringPoolResult, PATH_KEY_BYTES_LIMIT, PATH_PATCH_BYTES_LIMIT,
@@ -173,6 +173,22 @@ impl<'s> PoolPreparation<'s> {
                 }
                 self.prepare_string(value)?;
                 self.prepare_path(path)?;
+            }
+            Action::ArrayPatch { path, edits } => {
+                if self.txn.protocol() < 3 {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "array patch requires protocol 3",
+                    ));
+                }
+                ArrayPatchEdit::validate(edits)?;
+                self.prepare_path(path)?;
+                for edit in edits {
+                    for value in &edit.values {
+                        visit_strings(value, &mut |string, _| self.prepare_string(string))?;
+                        visit_bytes(value, &mut |value| self.prepare_bytes(value))?;
+                    }
+                }
             }
             Action::Delete { path } => self.prepare_path(path)?,
             Action::Copy { path, from } => {

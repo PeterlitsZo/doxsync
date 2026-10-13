@@ -158,6 +158,79 @@ impl<'d, 'c, 's> Differ<'d, 'c, 's> {
         old_value: &Value,
         new_value: &Value,
     ) -> Result<Vec<Action>> {
+        if old_value == new_value {
+            return Ok(Vec::new());
+        }
+        if self.cost.protocol() < 3 {
+            return self.diff_array_positional(path, old_value, new_value);
+        }
+        let point = self.cost.savepoint();
+        let mut best = None;
+        let mut first_error = None;
+        match self.diff_array_positional(path.clone(), old_value, new_value) {
+            Ok(actions) => best = Some((actions, self.cost.encoded_len())),
+            Err(error) => {
+                first_error = Some(error);
+            }
+        }
+        self.cost.rollback_to(point);
+
+        let patch = super::array_diff::array_diff(
+            old_value.as_array().expect("must be array"),
+            new_value.as_array().expect("must be array"),
+        )
+        .filter(|edits| !edits.is_empty())
+        .map(|edits| Action::ArrayPatch {
+            path: path.clone(),
+            edits,
+        });
+        let replacement = if path.is_empty() {
+            Action::Snapshot {
+                value: new_value.clone(),
+            }
+        } else if matches!(path.segments().last(), Some(PathSegment::Index(_))) {
+            Action::Replace {
+                path,
+                value: new_value.clone(),
+            }
+        } else {
+            Action::Add {
+                path,
+                value: new_value.clone(),
+            }
+        };
+        for action in patch.into_iter().chain(std::iter::once(replacement)) {
+            match self.cost.append(&action) {
+                Ok(()) => {
+                    let len = self.cost.encoded_len();
+                    if best.as_ref().is_none_or(|(_, best_len)| len < *best_len) {
+                        best = Some((vec![action], len));
+                    }
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+            self.cost.rollback_to(point);
+        }
+        let Some((actions, _)) = best else {
+            return Err(first_error.expect("all array candidates failed"));
+        };
+        for action in &actions {
+            if let Err(error) = self.cost.append(action) {
+                self.cost.rollback_to(point);
+                return Err(error);
+            }
+        }
+        Ok(actions)
+    }
+
+    fn diff_array_positional(
+        &mut self,
+        path: Path,
+        old_value: &Value,
+        new_value: &Value,
+    ) -> Result<Vec<Action>> {
         let old_array = old_value.as_array().expect("must be array");
         let new_array = new_value.as_array().expect("must be array");
         let mut actions = vec![];

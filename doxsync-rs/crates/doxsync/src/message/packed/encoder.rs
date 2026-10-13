@@ -79,6 +79,18 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
                     self.pack_path_by_key(bytes, &Arc::new(path.clone()))?;
                     self.pack_tstr(bytes, value);
                 }
+                Action::ArrayPatch { path, edits } => {
+                    self.pack_path_by_key(bytes, &Arc::new(path.clone()))?;
+                    self.pack_varuint(bytes, edits.len() as u64);
+                    for edit in edits {
+                        self.pack_varuint(bytes, edit.start as u64);
+                        self.pack_varuint(bytes, edit.delete_count as u64);
+                        self.pack_varuint(bytes, edit.values.len() as u64);
+                        for value in &edit.values {
+                            self.pack_value(bytes, value);
+                        }
+                    }
+                }
                 Action::Delete { path } => {
                     self.pack_path_by_key(bytes, &Arc::new(path.clone()))?;
                 }

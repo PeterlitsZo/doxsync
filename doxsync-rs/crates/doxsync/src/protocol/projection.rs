@@ -121,6 +121,21 @@ fn lower_action_decimals(action: &Action) -> Option<Action> {
             path: path.clone(),
             value,
         }),
+        Action::ArrayPatch { path, edits } => {
+            let mut replacement = None;
+            for (index, edit) in edits.iter().enumerate() {
+                for (value_index, value) in edit.values.iter().enumerate() {
+                    if let Some(value) = lower_decimals(value) {
+                        replacement.get_or_insert_with(|| edits.clone())[index].values
+                            [value_index] = value;
+                    }
+                }
+            }
+            replacement.map(|edits| Action::ArrayPatch {
+                path: path.clone(),
+                edits,
+            })
+        }
         Action::Delete { .. }
         | Action::Copy { .. }
         | Action::TStrAppend { .. }

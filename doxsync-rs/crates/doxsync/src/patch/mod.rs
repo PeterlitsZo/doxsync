@@ -1,8 +1,6 @@
 use std::{fmt::Debug, sync::Arc};
 
-#[cfg(test)]
-use crate::Result;
-use crate::Value;
+use crate::{Error, ErrorKind, Result, Value};
 
 /// A doxsync action.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +33,14 @@ pub(crate) enum Action {
         path: Path,
     },
 
+    /// Applies local edits to an existing array value at the given path.
+    ArrayPatch {
+        /// The validated path of the array to patch.
+        path: Path,
+        /// Edits in descending original array index order.
+        edits: Vec<ArrayPatchEdit>,
+    },
+
     /// Appends a fragment to an existing string in place.
     TStrAppend { path: Path, value: Arc<String> },
 
@@ -48,6 +54,38 @@ pub(crate) enum Action {
         /// The path to copy the value from.
         from: Path,
     },
+}
+
+/// One edit in an array patch action.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ArrayPatchEdit {
+    /// Start index, measured against the array immediately before this action.
+    pub start: usize,
+    /// Number of elements to delete from the original array.
+    pub delete_count: usize,
+    /// Values to insert at start after deletion.
+    pub values: Vec<Value>,
+}
+
+impl ArrayPatchEdit {
+    /// Checks document-independent ordering, overlap, and range arithmetic.
+    pub(crate) fn validate(edits: &[Self]) -> Result<()> {
+        let mut previous = None;
+        for edit in edits {
+            let end = edit
+                .start
+                .checked_add(edit.delete_count)
+                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "array patch range overflow"))?;
+            if previous.is_some_and(|start| edit.start >= start || end > start) {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "array patch edits must be descending and non-overlapping",
+                ));
+            }
+            previous = Some(edit.start);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -115,6 +115,19 @@ impl<'s> CostSession<'s> {
                 cost += self.path_cost(path);
                 cost += tstr_encoded_len(value.len(), self.pools.string_key(value));
             }
+            Action::ArrayPatch { path, edits } => {
+                cost += self.path_cost(path) + varuint_len(edits.len() as u64);
+                for edit in edits {
+                    cost += varuint_len(edit.start as u64)
+                        + varuint_len(edit.delete_count as u64)
+                        + varuint_len(edit.values.len() as u64);
+                    for value in &edit.values {
+                        cost = cost.checked_add(self.value_cost(value)?).ok_or_else(|| {
+                            Error::new(ErrorKind::InvalidData, "array patch cost too large")
+                        })?;
+                    }
+                }
+            }
             Action::Delete { path } => cost += self.path_cost(path),
             Action::Copy { path, from } => {
                 cost += self.path_cost(path);
