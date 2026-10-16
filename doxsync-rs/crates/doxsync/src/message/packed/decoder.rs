@@ -1034,7 +1034,7 @@ impl PackedMessageDecoder {
                             .get(..len)
                             .ok_or_else(|| invalid("truncated AOO bitmap"))?;
                         *bytes = &bytes[len..];
-                        if row_count % 8 != 0 && bitmap[len - 1] >> (row_count % 8) != 0 {
+                        if !row_count.is_multiple_of(8) && bitmap[len - 1] >> (row_count % 8) != 0 {
                             return Err(invalid("nonzero unused AOO bitmap bits"));
                         }
                         Some(bitmap)
@@ -1057,12 +1057,66 @@ impl PackedMessageDecoder {
                         }
                     }
                 }
-                DENSE_INT_DELTA | DENSE_DECIMAL_DELTA => {
+                DENSE_BOOL | DENSE_STRING => {
                     entries = entries
                         .checked_add(row_count)
                         .filter(|count| *count <= ENTRIES_LIMIT)
                         .ok_or_else(|| invalid("too many AOO entries"))?;
-                    let (scale, mut previous) = if mode == DENSE_INT_DELTA {
+                    if mode == DENSE_BOOL {
+                        let len = row_count.div_ceil(8);
+                        let bitmap = bytes
+                            .get(..len)
+                            .ok_or_else(|| invalid("truncated AOO bitmap"))?;
+                        *bytes = &bytes[len..];
+                        if !row_count.is_multiple_of(8) && bitmap[len - 1] >> (row_count % 8) != 0 {
+                            return Err(invalid("nonzero unused AOO bitmap bits"));
+                        }
+                        for (index, row) in rows.iter_mut().enumerate() {
+                            row.insert(
+                                key.clone(),
+                                Value::inner_bool(bitmap[index / 8] & (1 << (index % 8)) != 0),
+                            );
+                        }
+                    } else {
+                        if row_count > bytes.len() {
+                            return Err(invalid("truncated AOO strings"));
+                        }
+                        for row in &mut rows {
+                            let descriptor = Self::unpack_varuint(bytes)?;
+                            let payload = descriptor >> 1;
+                            let string = if descriptor & 1 == 0 {
+                                let slot = u32::try_from(payload)
+                                    .map_err(|_| invalid("AOO string slot overflow"))?;
+                                state
+                                    .get_string(slot)
+                                    .ok_or_else(|| invalid("AOO string not found in pool"))?
+                                    .as_ref()
+                                    .clone()
+                            } else {
+                                let len = usize::try_from(payload)
+                                    .map_err(|_| invalid("AOO string length overflow"))?;
+                                let data = bytes
+                                    .get(..len)
+                                    .ok_or_else(|| invalid("truncated AOO string"))?;
+                                let string = std::str::from_utf8(data)
+                                    .map_err(|_| invalid("invalid UTF-8 AOO string"))?
+                                    .to_owned();
+                                *bytes = &bytes[len..];
+                                string
+                            };
+                            row.insert(key.clone(), Value::inner_tstr(string));
+                        }
+                    }
+                }
+                DENSE_INT_DELTA | DENSE_DECIMAL_DELTA | DENSE_INT | DENSE_DECIMAL => {
+                    entries = entries
+                        .checked_add(row_count)
+                        .filter(|count| *count <= ENTRIES_LIMIT)
+                        .ok_or_else(|| invalid("too many AOO entries"))?;
+                    let raw = matches!(mode, DENSE_INT | DENSE_DECIMAL);
+                    let (scale, mut previous) = if mode == DENSE_INT {
+                        (None, decode_signed(bytes, 65)?)
+                    } else if mode == DENSE_INT_DELTA {
                         let first = match bytes.first().map(|byte| byte >> TAG_WIDTH) {
                             Some(TAG_POSINT) => Self::unpack_posint(bytes)?,
                             Some(TAG_NEGINT) => Self::unpack_negint(bytes)?,
@@ -1081,11 +1135,16 @@ impl PackedMessageDecoder {
                     }
                     for (index, row) in rows.iter_mut().enumerate() {
                         if index > 0 {
-                            let delta =
-                                decode_signed(bytes, if scale.is_some() { 98 } else { 64 })?;
-                            previous = previous
-                                .checked_add(delta)
-                                .ok_or_else(|| invalid("AOO delta overflow"))?;
+                            if raw {
+                                previous =
+                                    decode_signed(bytes, if scale.is_some() { 97 } else { 65 })?;
+                            } else {
+                                let delta =
+                                    decode_signed(bytes, if scale.is_some() { 98 } else { 64 })?;
+                                previous = previous
+                                    .checked_add(delta)
+                                    .ok_or_else(|| invalid("AOO delta overflow"))?;
+                            }
                         }
                         let value = if let Some(scale) = scale {
                             let coefficient = previous.unsigned_abs();

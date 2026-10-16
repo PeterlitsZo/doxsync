@@ -94,16 +94,19 @@ Message details show the operations decoded from each sent message: its protocol
 paths, values, and array edit ranges. An independent `MessageInspector` from `@doxsync/inspector` follows the
 send stream, so inspection works before delayed delivery and selecting historical
 messages does not replay bytes through the decoder. The default Wire contents
-view is a plain, indented hex listing with short inline comments:
+view is a plain, indented hex listing with hexadecimal byte offsets and short
+inline comments:
 
 ```text
-02 # 2 metadatas
-  02 04 # Use protocol 4
-  00 1b # Apply string pool patch, 27 entries
-    00 06 6f 6e 6c 69 6e 65 # strings[0] = "online"
+0000   02 # 2 metadatas
+0001     02 04 # Use protocol 4
+0003     00 1b # Apply string pool patch, 27 entries
+0005       00 06 6f 6e 6c 69 6e 65 # strings[0] = "online"
 ```
 
-Each byte appears exactly once, in wire order. Counts, pool definitions, action
+Offsets are relative to the start of the message, padded to at least four digits,
+and expand together for larger messages. Each byte appears exactly once, in wire
+order. Counts, pool definitions, action
 opcodes, paths, and payloads are grouped into readable lines. AOO headers show
 `c0 06 03` as AOO / six rows / three columns; indented column data identifies key
 references, modes, bitmap presence, and delta arithmetic. The listing is directly

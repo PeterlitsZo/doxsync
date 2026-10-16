@@ -34,10 +34,13 @@ export function describeAction(action: MessageAction): ActionView {
 /** Render the parser's grouping hints without decoding any bytes in the UI. */
 export function describeWire(fields: readonly import("@doxsync/inspector").WireField[]): string {
   const lines: string[] = [];
+  const lastOffset = fields.reduce((last, field) => Math.max(last, field.offset + field.length - 1), 0);
+  const offsetWidth = Math.max(4, lastOffset.toString(16).length);
   function visit(field: import("@doxsync/inspector").WireField, depth: number) {
     const prefixLength = field.children.slice(0, field.prefix).reduce((sum, child) => sum + child.length, 0);
     const bytes = field.children.length ? field.hex.split(" ").slice(0, prefixLength).join(" ") : field.hex;
-    lines.push(`${"  ".repeat(depth)}${bytes}${bytes ? " " : ""}# ${field.annotation}`);
+    const offset = field.offset.toString(16).padStart(offsetWidth, "0");
+    lines.push(`${offset}   ${"  ".repeat(depth)}${bytes}${bytes ? " " : ""}# ${field.annotation}`);
     field.children.slice(field.prefix).forEach((child) => visit(child, depth + 1));
   }
   fields.forEach((field) => visit(field, field.label.startsWith("Metadata ") && field.children.length || field.label.startsWith("Action ") && field.children.length ? 1 : 0));

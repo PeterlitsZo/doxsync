@@ -440,6 +440,49 @@ impl<'a, 's> PackedMessageEncoderInternal<'a, 's> {
                         self.pack_value(bytes, value);
                     }
                 }
+                DENSE_BOOL => {
+                    let start = bytes.len();
+                    bytes.resize(start + rows.div_ceil(8), 0);
+                    for (row, value) in column.entries {
+                        if matches!(value.inner(), crate::ValueInner::Bool { inner: true }) {
+                            bytes[start + row / 8] |= 1 << (row % 8);
+                        }
+                    }
+                }
+                DENSE_STRING => {
+                    for (_, value) in column.entries {
+                        let crate::ValueInner::TStr { inner } = value.inner() else {
+                            unreachable!()
+                        };
+                        match string_ref(inner, self.state_txn.get_string_key(inner)) {
+                            Some(slot) => self.pack_varuint(bytes, u64::from(slot) << 1),
+                            None => {
+                                self.pack_varuint(bytes, (inner.len() as u64) << 1 | 1);
+                                bytes.extend_from_slice(inner.as_bytes());
+                            }
+                        }
+                    }
+                }
+                DENSE_INT | DENSE_DECIMAL => {
+                    if column.mode == DENSE_DECIMAL {
+                        let crate::ValueInner::Decimal { inner } = column.entries[0].1.inner()
+                        else {
+                            unreachable!()
+                        };
+                        bytes.push(inner.scale() as u8);
+                    }
+                    for (_, value) in column.entries {
+                        let coefficient = if column.mode == DENSE_INT {
+                            integer(value).expect("planned integer")
+                        } else {
+                            let crate::ValueInner::Decimal { inner } = value.inner() else {
+                                unreachable!()
+                            };
+                            inner.mantissa()
+                        };
+                        encode_signed(bytes, coefficient);
+                    }
+                }
                 DENSE_INT_DELTA | DENSE_DECIMAL_DELTA => {
                     let first = column.entries[0].1;
                     let mut previous = if column.mode == DENSE_INT_DELTA {

@@ -172,8 +172,8 @@ impl<'s> CostSession<'s> {
     }
 
     // Pools remain pinned throughout preparation. Column layout changes only
-    // structure and scalar numeric payloads, so nested savings are additive and
-    // ordinary string/binary costs remain valid. Reuse the encoder's planner.
+    // structure and scalar payloads, so nested savings are additive. The shared
+    // planner accounts for string column savings against ordinary string costs.
     fn aoo_savings(&self, value: &Value) -> usize {
         match value.inner() {
             ValueInner::Array { inner } => {

@@ -1,10 +1,10 @@
 //! Protocol 4 column plans. Pool preparation remains in logical row order, so
-//! ordinary child payloads cancel exactly when comparing the two layouts.
+//! unchanged child payloads cancel when comparing the two layouts.
 use std::{collections::BTreeMap, sync::Arc};
 
 use super::{
     consts::*,
-    layout::{payload_width, value_base_cost, varuint_len},
+    layout::{payload_width, tstr_encoded_len, value_base_cost, varuint_len},
 };
 use crate::{Error, ErrorKind, Result, Value, ValueInner};
 
@@ -12,6 +12,10 @@ pub(crate) const DENSE_VALUES: u8 = 0;
 pub(crate) const SPARSE_VALUES: u8 = 1;
 pub(crate) const DENSE_INT_DELTA: u8 = 2;
 pub(crate) const DENSE_DECIMAL_DELTA: u8 = 3;
+pub(crate) const DENSE_BOOL: u8 = 4;
+pub(crate) const DENSE_INT: u8 = 5;
+pub(crate) const DENSE_DECIMAL: u8 = 6;
+pub(crate) const DENSE_STRING: u8 = 7;
 pub(crate) const ROWS_LIMIT: usize = 65_536;
 pub(crate) const COLUMNS_LIMIT: usize = 4_096;
 pub(crate) const ENTRIES_LIMIT: usize = 262_144;
@@ -82,24 +86,87 @@ pub(crate) fn plan<'a>(
         }
     }
     let mut compact = 1 + varuint_len(rows.len() as u64) + varuint_len(columns.len() as u64);
-    let mut numeric_savings = 0;
+    let mut payload_savings = 0;
     for column in columns.values_mut() {
         compact = compact.checked_add(key_len(column.key, string_key(column.key)) + 1)?;
         if column.entries.len() != rows.len() {
             column.mode = SPARSE_VALUES;
             compact = compact.checked_add(rows.len().div_ceil(8))?;
-        } else if let Some((mode, saved)) = delta_choice(&column.entries) {
+        } else if let Some((mode, saved)) = column_choice(&column.entries, &mut string_key) {
             column.mode = mode;
-            numeric_savings += saved;
+            payload_savings += saved;
         }
     }
     let savings = ordinary
-        .checked_add(numeric_savings)?
+        .checked_add(payload_savings)?
         .checked_sub(compact)?;
     (savings > 0).then(|| Plan {
         columns: columns.into_values().collect(),
         savings,
     })
+}
+
+/// Select a reference only when it beats the literal in the column format.
+pub(crate) fn string_ref(value: &str, slot: Option<u32>) -> Option<u32> {
+    let literal = varuint_len((value.len() as u64) << 1 | 1) + value.len();
+    slot.filter(|slot| varuint_len(u64::from(*slot) << 1) < literal)
+}
+
+fn column_choice(
+    entries: &[(usize, &Value)],
+    string_key: &mut impl FnMut(&Arc<String>) -> Option<u32>,
+) -> Option<(u8, usize)> {
+    let first = entries.first()?.1;
+    let mut ordinary = 0;
+    let mut compact = 0;
+    let mode = match first.inner() {
+        ValueInner::Bool { .. } => DENSE_BOOL,
+        ValueInner::PosInt { .. } | ValueInner::NegInt { .. } => DENSE_INT,
+        ValueInner::Decimal { .. } => DENSE_DECIMAL,
+        ValueInner::TStr { .. } => DENSE_STRING,
+        _ => return None,
+    };
+    for (_, value) in entries {
+        ordinary += value_base_cost(value, 4);
+        compact += match (mode, value.inner()) {
+            (DENSE_BOOL, ValueInner::Bool { .. }) => 0,
+            (DENSE_INT, _) => signed_len(integer(value)?),
+            (DENSE_DECIMAL, ValueInner::Decimal { inner }) => {
+                let ValueInner::Decimal { inner: first } = first.inner() else {
+                    unreachable!()
+                };
+                if inner.scale() != first.scale() {
+                    return None;
+                }
+                signed_len(inner.mantissa())
+            }
+            (DENSE_STRING, ValueInner::TStr { inner }) => {
+                let slot = string_key(inner);
+                ordinary += tstr_encoded_len(inner.len(), slot);
+                match string_ref(inner, slot) {
+                    Some(slot) => varuint_len(u64::from(slot) << 1),
+                    None => varuint_len((inner.len() as u64) << 1 | 1) + inner.len(),
+                }
+            }
+            _ => return None,
+        };
+    }
+    compact += match mode {
+        DENSE_BOOL => entries.len().div_ceil(8),
+        DENSE_DECIMAL => 1,
+        _ => 0,
+    };
+    let mut choice = ordinary
+        .checked_sub(compact)
+        .filter(|saved| *saved > 0)
+        .map(|saved| (mode, saved));
+    if matches!(mode, DENSE_INT | DENSE_DECIMAL)
+        && let Some(delta) = delta_choice(entries)
+        && choice.is_none_or(|(_, saved)| delta.1 > saved)
+    {
+        choice = Some(delta);
+    }
+    choice
 }
 
 fn delta_choice(entries: &[(usize, &Value)]) -> Option<(u8, usize)> {

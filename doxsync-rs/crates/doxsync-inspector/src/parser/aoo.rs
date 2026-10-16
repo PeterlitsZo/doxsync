@@ -41,15 +41,24 @@ impl<'a> Parser<'a> {
                     "DENSE_DECIMAL_DELTA",
                     "shared scale, signed coefficient, then coefficient deltas",
                 ),
+                4 => ("DENSE_BOOL", "one bit per row, LSB first"),
+                5 => ("DENSE_INT", "one ZigZag LEB128 integer per row"),
+                6 => (
+                    "DENSE_DECIMAL",
+                    "shared scale, then ZigZag LEB128 coefficients",
+                ),
+                7 => ("DENSE_STRING", "UTF-8 literals or string pool references"),
                 _ => return self.fail("Unknown AOO mode"),
             };
             let name = format!("{mode_name}: {description}");
             f.last_mut().unwrap().explanation = format!("{mode:02x} = {name}");
             let prefix = f.len();
-            entries += if mode <= 1 {
-                self.value_column(&mut f, &key, &mut values, mode == 1, depth)?
-            } else {
-                self.delta_column(&mut f, &key, &mut values, mode == 3, depth)?
+            entries += match mode {
+                0 | 1 => self.value_column(&mut f, &key, &mut values, mode == 1, depth)?,
+                2 | 3 | 5 | 6 => self.numeric_column(&mut f, &key, &mut values, mode, depth)?,
+                4 => self.bool_column(&mut f, &key, &mut values)?,
+                7 => self.string_column(&mut f, &key, &mut values)?,
+                _ => unreachable!(),
             };
             if entries > limits::AOO_ENTRIES {
                 return self.fail("AOO entry limit exceeded");
@@ -121,14 +130,78 @@ impl<'a> Parser<'a> {
         Ok(count)
     }
 
-    fn delta_column(
+    fn bool_column(
         &mut self,
         f: &mut Vec<Field>,
         key: &str,
         values: &mut [BTreeMap<String, Value>],
-        decimal: bool,
+    ) -> Result<usize> {
+        let start = self.cursor.pos;
+        let rows = values.len();
+        let bitmap = self.cursor.take(rows.div_ceil(8))?.to_vec();
+        if !rows.is_multiple_of(8) && bitmap[bitmap.len() - 1] >> (rows % 8) != 0 {
+            return self.fail("Nonzero unused bitmap bits");
+        }
+        let mut meanings = Vec::new();
+        for (i, row) in values.iter_mut().enumerate() {
+            let value = bitmap[i / 8] & (1 << (i % 8)) != 0;
+            row.insert(key.to_owned(), Value::Boolean(value));
+            meanings.push(format!("row {i}: {value}"));
+        }
+        self.leaf(
+            f,
+            start,
+            "Boolean bitmap",
+            format!("LSB first; {}", meanings.join("; ")),
+        )?;
+        Ok(rows)
+    }
+
+    fn string_column(
+        &mut self,
+        f: &mut Vec<Field>,
+        key: &str,
+        values: &mut [BTreeMap<String, Value>],
+    ) -> Result<usize> {
+        for (i, row) in values.iter_mut().enumerate() {
+            let descriptor =
+                self.var(f, &format!("Row {i} · string descriptor"), 64, false)? as u64;
+            let payload = descriptor >> 1;
+            let value = if descriptor & 1 == 0 {
+                if payload > u32::MAX as u64 {
+                    return self.fail("String slot overflow");
+                }
+                let value = self.string(payload)?;
+                f.last_mut().unwrap().explanation.push_str(&format!(
+                    "; low bit 0 = reference; READ strings[{payload}] = {value:?}"
+                ));
+                value
+            } else {
+                f.last_mut()
+                    .unwrap()
+                    .explanation
+                    .push_str(&format!("; low bit 1 = literal; {payload} UTF-8 bytes"));
+                self.text(
+                    f,
+                    &format!("Row {i} · UTF-8 bytes"),
+                    usize::try_from(payload).map_err(|_| self.error("String length overflow"))?,
+                )?
+            };
+            row.insert(key.to_owned(), Value::String(value));
+        }
+        Ok(values.len())
+    }
+
+    fn numeric_column(
+        &mut self,
+        f: &mut Vec<Field>,
+        key: &str,
+        values: &mut [BTreeMap<String, Value>],
+        mode: u8,
         depth: usize,
     ) -> Result<usize> {
+        let decimal = matches!(mode, 3 | 6);
+        let raw = matches!(mode, 5 | 6);
         let scale = if decimal {
             let scale = self.byte(f, "Shared decimal scale")?;
             if scale > 28 {
@@ -138,7 +211,9 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let mut prev = if !decimal {
+        let mut prev = if mode == 5 {
+            self.signed(f, "Row 0 · integer", 65)?
+        } else if !decimal {
             let value = self.value(f, "Row 0 · first integer", depth)?;
             match value {
                 Value::Integer(value) => value,
@@ -148,7 +223,16 @@ impl<'a> Parser<'a> {
             self.signed(f, "Row 0 · signed coefficient", 97)?
         };
         for (i, row) in values.iter_mut().enumerate() {
-            if i > 0 {
+            if i > 0 && raw {
+                prev = self.signed(
+                    f,
+                    &format!(
+                        "Row {i} · {}",
+                        if decimal { "coefficient" } else { "integer" }
+                    ),
+                    if decimal { 97 } else { 65 },
+                )?;
+            } else if i > 0 {
                 let delta = self.signed(
                     f,
                     &format!("Row {i} · delta"),
