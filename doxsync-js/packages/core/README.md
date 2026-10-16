@@ -49,6 +49,12 @@ Deliver messages exactly once and in order to the matching consumer. Keep each
 message until delivered: calling `produceDiff()` again does not retransmit it.
 If either side loses its session state, create a new producer and consumer.
 
+## Inspect message contents
+
+The workspace's [private inspector package](../inspector/README.md) provides an
+independent byte-level disassembler used by the playground. It is a separate WASM
+module and is not included in the core SDK.
+
 ## Supported values
 
 Use `null`, booleans, strings, numbers, `bigint`, `Uint8Array`, dense arrays,
@@ -81,7 +87,7 @@ Deploy the packaged WASM asset alongside the JavaScript. If your bundler relocat
 it, pass its deployed URL or bytes to `init(source)`. The asset is exported as
 `@doxsync/core/doxsync.wasm`; serve `.wasm` files as `application/wasm`.
 Node.js loads the packaged asset automatically. Without a bundler, also provide
-an import map for `decimal.js`; see the [browser example](examples/browser.html).
+an import map for `decimal.js`; see the [minimal browser example](examples/browser.html).
 
 ## Build from source
 
@@ -95,5 +101,10 @@ pnpm build
 pnpm example
 ```
 
-To run the browser example, serve `doxsync-js/` with `python3 -m http.server 8000`
+The framework-free browser example sends an initial snapshot and one incremental
+update, then frees both SDK handles. For the interactive React application with
+message history and simulated delivery, see the
+[playground](../playground/README.md).
+
+To run the minimal browser example, serve `doxsync-js/` with `python3 -m http.server 8000`
 and open `/packages/core/examples/browser.html`.

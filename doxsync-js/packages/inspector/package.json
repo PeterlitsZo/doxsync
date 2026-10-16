@@ -1,0 +1,24 @@
+{
+  "name": "@doxsync/inspector",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./inspector.wasm": "./dist/wasm/doxsync_inspector_bg.wasm"
+  },
+  "scripts": {
+    "build": "node scripts/build-wasm.mjs && tsc"
+  },
+  "dependencies": {
+    "@doxsync/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "@types/node": "^22.20.4"
+  }
+}
